@@ -177,7 +177,7 @@ impl InfoParser {
             }
         }
 
-        lines.into_iter().map(|l| self.push(l)).map_while(un_opt)
+        lines.into_iter().map(|l| self.push(l)).filter_map(un_opt)
     }
 }
 
