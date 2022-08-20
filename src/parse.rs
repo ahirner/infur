@@ -1,16 +1,29 @@
 #![allow(dead_code)]
 
-/// Describes one output's video stream
+/// Describes one video stream
 #[derive(Debug, Clone, PartialEq)]
-struct OutputStream {
+struct Stream {
     num: u32,
-    to: String,
     width: u32,
     height: u32,
     fps: Option<f32>,
 }
 
-/// Describes one stream's update
+/// Describes one output's video stream
+#[derive(Debug, Clone, PartialEq)]
+struct InputStream {
+    from: String,
+    stream: Stream,
+}
+
+/// Describes one output's video stream
+#[derive(Debug, Clone, PartialEq)]
+struct OutputStream {
+    to: String,
+    stream: Stream,
+}
+
+/// Describes a stream's update
 #[derive(Debug, Clone, PartialEq)]
 struct FrameUpdate {
     frame: u64,
@@ -21,7 +34,8 @@ struct FrameUpdate {
 
 #[derive(Debug, Clone, PartialEq)]
 enum VideoInfoMessage {
-    OutputMeta(OutputStream),
+    InputInfo(InputStream),
+    OutputInfo(OutputStream),
     Frame(FrameUpdate),
     //    Decoder(DecoderUpdate),
 }
@@ -30,6 +44,7 @@ enum VideoInfoMessage {
 enum ParseContext {
     Stateless,
     Output(u32, String),
+    Input(u32, String),
 }
 
 #[derive(Debug, Clone)]
@@ -61,43 +76,62 @@ impl InfoParser {
         let error_on = |reason| self.error_on(reason, line);
         let error_on_ = |reason| self.error_on(reason, line); // no generic closures
 
-        // Begin Output Stream
-        let output = line.trim_start_matches("Output #");
-        if output.len() < line.len() {
-            if !matches!(self.mode, ParseContext::Stateless) {
-                return Err(error_on("already parsing an Output"));
-            }
-            let mut parts = output.split(',');
-            let out_num = parts
+        // Begin Stream
+        let output = line.strip_prefix("Output #").unwrap_or(line);
+        let input = line.strip_prefix("Input #").unwrap_or(line);
+        let in_out = match (input.len(), output.len()) {
+            (i, _) if i < line.len() => Some((true, input)),
+            (_, o) if o < line.len() => Some((false, output)),
+            _ => None,
+        };
+        if let Some((is_input, remaining)) = in_out {
+            let mut parts = remaining.split(',');
+            let num_stream = parts
                 .next()
                 .ok_or_else(|| error_on("no delimiter after output number"))?
                 .trim()
                 .parse::<u32>()
-                .map_err(|e| error_on_(format!("Output # not a number {:?}", e)))?;
-            let _codec = parts.next().ok_or("nothing after output number");
-            let to = parts.next().ok_or_else(|| error_on("nothing after codec"))?.trim();
+                .map_err(|e| error_on_(format!("# not a number but {:?}", e)))?;
+            let to_from =
+                parts.last().ok_or_else(|| error_on("no last stream element (from or to)"))?.trim();
 
-            self.mode = ParseContext::Output(out_num, to.to_string());
+            // unquote and extract if possible
+            let to_from =
+                to_from.strip_prefix(if is_input { "from '" } else { "to '" }).unwrap_or(to_from);
+            let to_from = to_from.strip_suffix("':").unwrap_or(to_from);
+
+            self.mode = if is_input {
+                ParseContext::Input(num_stream, to_from.to_string())
+            } else {
+                ParseContext::Output(num_stream, to_from.to_string())
+            };
             return Ok(None);
         }
 
-        // Parse Output Video Stream infos
+        // reset if some other header comes up
         let line_trimmed = line.trim();
-        let stream = line_trimmed.trim_start_matches("Stream #");
-        if stream.len() < line_trimmed.len() {
-            let context = match self.mode {
-                ParseContext::Output(out_num, ref to) => (out_num, to),
-                _ => return Err(error_on("found Stream while not parsing an Output")),
+        if line_trimmed.len() == line.len() {
+            self.mode = ParseContext::Stateless;
+            return Ok(None);
+        }
+
+        // Parse VideoStream infos
+        let stream = line_trimmed.strip_prefix("Stream #").unwrap_or(line_trimmed);
+        if !matches!(self.mode, ParseContext::Stateless) && stream.len() < line_trimmed.len() {
+            let (is_input, num_stream, to_from) = match self.mode {
+                ParseContext::Input(num_stream, ref from) => (true, num_stream, from),
+                ParseContext::Output(num_stream, ref to) => (false, num_stream, to),
+                _ => return Err(error_on("found Stream while not parsing it")),
             };
             let mut parts = stream.split(':');
-            let out_num_stream = parts
+            let parse_num_stream = parts
                 .next()
                 .ok_or_else(|| error_on("no delimiter after stream number"))?
                 .parse::<u32>()
                 .map_err(|e| error_on_(format!("Stream # not a number {:?}", e)))?;
 
-            if context.0 != out_num_stream {
-                return Err(error_on_(format!("Stream {} didn't match Output", out_num_stream)));
+            if num_stream != parse_num_stream {
+                return Err(error_on_(format!("Stream {} didn't match Output", parse_num_stream)));
             };
 
             let mut is_video = false;
@@ -134,13 +168,14 @@ impl InfoParser {
                 }
             }
             return if let Some((width, height)) = width_height {
-                Ok(Some(VideoInfoMessage::OutputMeta(OutputStream {
-                    num: context.0,
-                    to: context.1.clone(),
-                    width,
-                    height,
-                    fps,
-                })))
+                let stream = Stream { num: num_stream, width, height, fps };
+                let info = if is_input {
+                    VideoInfoMessage::InputInfo(InputStream { from: to_from.clone(), stream })
+                } else {
+                    VideoInfoMessage::OutputInfo(OutputStream { to: to_from.clone(), stream })
+                };
+                self.mode = ParseContext::Stateless;
+                Ok(Some(info))
             } else {
                 Err(error_on("didn't find <width>x<height> in first video Stream Output"))
             };
@@ -169,7 +204,6 @@ impl InfoParser {
         I: IntoIterator<Item = &'a str> + 'a,
     {
         fn un_opt(info: InfoResult) -> Option<FilteredInfo> {
-            dbg!(&info);
             match info {
                 Err(e) => Some(Err(e)),
                 Ok(Some(m)) => Some(Ok(m)),
@@ -183,7 +217,9 @@ impl InfoParser {
 
 #[cfg(test)]
 mod test {
-    use super::{InfoParser, OutputStream, VideoInfoMessage};
+    use crate::parse::Stream;
+
+    use super::{InfoParser, InputStream, OutputStream, VideoInfoMessage};
 
     static TEST_INFO: &str = r#"Input #0, mov,mp4,m4a,3gp,3g2,mj2, from 'media/huhu_test.mp4':
   Metadata:
@@ -227,12 +263,16 @@ frame=27045 fps=1019 q=-0.0 size=73021500kB time=00:15:01.50 bitrate=663552.0kbi
 
         assert_eq!(
             infos.next().unwrap(),
-            Ok(VideoInfoMessage::OutputMeta(OutputStream {
-                num: 0,
+            Ok(VideoInfoMessage::InputInfo(InputStream {
+                stream: Stream { num: 0, width: 1280, height: 720, fps: Some(29.59f32) },
+                from: "media/huhu_test.mp4".to_string(),
+            }))
+        );
+        assert_eq!(
+            infos.next().unwrap(),
+            Ok(VideoInfoMessage::OutputInfo(OutputStream {
+                stream: Stream { num: 0, width: 1280, height: 720, fps: Some(30f32) },
                 to: "pipe:".to_string(),
-                width: 720,
-                height: 1280,
-                fps: Some(30f32),
             }))
         );
     }
