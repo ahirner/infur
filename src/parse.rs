@@ -27,15 +27,18 @@ struct OutputStream {
 #[derive(Debug, Clone, PartialEq)]
 struct FrameUpdate {
     frame: u64,
+    fps: Option<f32>,
+    dup: Option<u32>,
+    drop: Option<u32>,
 }
 
 //#[derive(Debug, Clone, PartialEq)]
 //struct DecoderUpdate {}
 
 #[derive(Debug, Clone, PartialEq)]
-enum VideoInfoMessage {
-    InputInfo(InputStream),
-    OutputInfo(OutputStream),
+enum VideoInfo {
+    Input(InputStream),
+    Output(OutputStream),
     Frame(FrameUpdate),
     //    Decoder(DecoderUpdate),
 }
@@ -59,8 +62,8 @@ struct ParseError {
     reason: String,
 }
 
-type InfoResult = Result<Option<VideoInfoMessage>, ParseError>;
-type FilteredInfo = Result<VideoInfoMessage, ParseError>;
+type InfoResult = Result<Option<VideoInfo>, ParseError>;
+type FilteredInfo = Result<VideoInfo, ParseError>;
 
 impl InfoParser {
     fn default() -> Self {
@@ -72,7 +75,6 @@ impl InfoParser {
     }
 
     fn push(&mut self, line: &str) -> InfoResult {
-        dbg!(line);
         let error_on = |reason| self.error_on(reason, line);
         let error_on_ = |reason| self.error_on(reason, line); // no generic closures
 
@@ -108,22 +110,25 @@ impl InfoParser {
             return Ok(None);
         }
 
-        // reset if some other header comes up
         let line_trimmed = line.trim();
-        if line_trimmed.len() == line.len() {
+        let frame_str = line_trimmed.strip_prefix("frame=").unwrap_or(line_trimmed);
+
+        // reset if some other header comes up
+        if line_trimmed.len() == line.len() && !frame_str.len() < line.len() {
             self.mode = ParseContext::Stateless;
             return Ok(None);
         }
 
-        // Parse VideoStream infos
-        let stream = line_trimmed.strip_prefix("Stream #").unwrap_or(line_trimmed);
-        if !matches!(self.mode, ParseContext::Stateless) && stream.len() < line_trimmed.len() {
+        // VideoInfos
+        let stream_str = line_trimmed.strip_prefix("Stream #").unwrap_or(line_trimmed);
+        if !matches!(self.mode, ParseContext::Stateless) && stream_str.len() < line_trimmed.len() {
+            // let chains ftw: https://github.com/rust-lang/rust/issues/53667
             let (is_input, num_stream, to_from) = match self.mode {
                 ParseContext::Input(num_stream, ref from) => (true, num_stream, from),
                 ParseContext::Output(num_stream, ref to) => (false, num_stream, to),
                 _ => return Err(error_on("found Stream while not parsing it")),
             };
-            let mut parts = stream.split(':');
+            let mut parts = stream_str.split(':');
             let parse_num_stream = parts
                 .next()
                 .ok_or_else(|| error_on("no delimiter after stream number"))?
@@ -170,9 +175,9 @@ impl InfoParser {
             return if let Some((width, height)) = width_height {
                 let stream = Stream { num: num_stream, width, height, fps };
                 let info = if is_input {
-                    VideoInfoMessage::InputInfo(InputStream { from: to_from.clone(), stream })
+                    VideoInfo::Input(InputStream { from: to_from.clone(), stream })
                 } else {
-                    VideoInfoMessage::OutputInfo(OutputStream { to: to_from.clone(), stream })
+                    VideoInfo::Output(OutputStream { to: to_from.clone(), stream })
                 };
                 self.mode = ParseContext::Stateless;
                 Ok(Some(info))
@@ -181,16 +186,32 @@ impl InfoParser {
             };
         }
 
-        let frame_str = line_trimmed.trim_start_matches("frame=");
+        // Frame message
         if frame_str.len() < line_trimmed.len() {
-            if let Some((frame_num_str, _others)) = frame_str.split_once(' ') {
+            // frame required
+            if let Some((frame_num_str, mut frame_rest)) = frame_str.trim().split_once(' ') {
                 let frame = frame_num_str
                     .trim()
                     .parse::<u64>()
                     .map_err(|_| error_on("frame is no number"))?;
 
-                let frame_upd = FrameUpdate { frame };
-                Ok(Some(VideoInfoMessage::Frame(frame_upd)))
+                // other key values if available
+                let (mut fps, mut dup, mut drop) = (None, None, None);
+                while let Some((key, rest)) = frame_rest.split_once('=') {
+                    if let Some((value, rest)) = rest.trim_start().split_once(' ') {
+                        match key {
+                            "fps" => fps = value.parse().ok(),
+                            "dup" => dup = value.parse().ok(),
+                            "drop" => drop = value.parse().ok(),
+                            _ => {}
+                        }
+                        frame_rest = rest;
+                    } else {
+                        frame_rest = rest;
+                    }
+                }
+                let frame_upd = FrameUpdate { frame, fps, dup, drop };
+                Ok(Some(VideoInfo::Frame(frame_upd)))
             } else {
                 Ok(None)
             }
@@ -217,9 +238,9 @@ impl InfoParser {
 
 #[cfg(test)]
 mod test {
-    use crate::parse::Stream;
+    use crate::parse::{FrameUpdate, Stream};
 
-    use super::{InfoParser, InputStream, OutputStream, VideoInfoMessage};
+    use super::{InfoParser, InputStream, OutputStream, VideoInfo};
 
     static TEST_INFO: &str = r#"Input #0, mov,mp4,m4a,3gp,3g2,mj2, from 'media/huhu_test.mp4':
   Metadata:
@@ -254,25 +275,54 @@ Output #0, image2pipe, to 'pipe:':
 
 frame= 3926 fps=978 q=-0.0 size=10600200kB time=00:02:10.86 bitrate=663552.0kbits/s speed=32.6x
 frame= 4026 fps=1002 q=-0.0 size=10870200kB time=00:02:14.20 bitrate=663552.0kbits/s speed=33.4x
-frame=27045 fps=1019 q=-0.0 size=73021500kB time=00:15:01.50 bitrate=663552.0kbits/s dup=0 drop=5 speed=  34x"#;
+frame=27045 fps= 1019.6 q=-0.0 size=73021500kB time=00:15:01.50 bitrate=663552.0kbits/s dup= 0 drop=5 speed=  34x"#;
 
     #[test]
     fn test_parse_info() {
         let mut parser = InfoParser::default();
         let mut infos = parser.iter_on(TEST_INFO.lines());
 
+        // input
         assert_eq!(
             infos.next().unwrap(),
-            Ok(VideoInfoMessage::InputInfo(InputStream {
+            Ok(VideoInfo::Input(InputStream {
                 stream: Stream { num: 0, width: 1280, height: 720, fps: Some(29.59f32) },
                 from: "media/huhu_test.mp4".to_string(),
             }))
         );
         assert_eq!(
             infos.next().unwrap(),
-            Ok(VideoInfoMessage::OutputInfo(OutputStream {
+            Ok(VideoInfo::Output(OutputStream {
                 stream: Stream { num: 0, width: 1280, height: 720, fps: Some(30f32) },
                 to: "pipe:".to_string(),
+            }))
+        );
+        // frames
+        assert_eq!(
+            infos.next().unwrap(),
+            Ok(VideoInfo::Frame(FrameUpdate {
+                frame: 3926,
+                fps: Some(978f32),
+                dup: None,
+                drop: None,
+            }))
+        );
+        assert_eq!(
+            infos.next().unwrap(),
+            Ok(VideoInfo::Frame(FrameUpdate {
+                frame: 4026,
+                fps: Some(1002f32),
+                dup: None,
+                drop: None,
+            }))
+        );
+        assert_eq!(
+            infos.next().unwrap(),
+            Ok(VideoInfo::Frame(FrameUpdate {
+                frame: 27045,
+                fps: Some(1019.6f32),
+                dup: Some(0),
+                drop: Some(5),
             }))
         );
     }
