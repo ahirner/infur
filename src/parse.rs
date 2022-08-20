@@ -32,15 +32,13 @@ struct FrameUpdate {
     drop: Option<u32>,
 }
 
-//#[derive(Debug, Clone, PartialEq)]
-//struct DecoderUpdate {}
-
+/// Describes a video's stream updates
 #[derive(Debug, Clone, PartialEq)]
 enum VideoInfo {
     Input(InputStream),
     Output(OutputStream),
     Frame(FrameUpdate),
-    //    Decoder(DecoderUpdate),
+    Codec(String),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -50,6 +48,7 @@ enum ParseContext {
     Input(u32, String),
 }
 
+/// Parses ffmpeg's stdout into VideoInfo
 #[derive(Debug, Clone)]
 struct InfoParser {
     mode: ParseContext,
@@ -110,6 +109,11 @@ impl InfoParser {
             return Ok(None);
         }
 
+        // Codec
+        if line.starts_with('[') && line.contains(']') {
+            return Ok(Some(VideoInfo::Codec(line.into())));
+        }
+
         let line_trimmed = line.trim();
         let frame_str = line_trimmed.strip_prefix("frame=").unwrap_or(line_trimmed);
 
@@ -126,7 +130,7 @@ impl InfoParser {
             let (is_input, num_stream, to_from) = match self.mode {
                 ParseContext::Input(num_stream, ref from) => (true, num_stream, from),
                 ParseContext::Output(num_stream, ref to) => (false, num_stream, to),
-                _ => return Err(error_on("found Stream while not parsing it")),
+                _ => return Err(error_on("found Stream while not looking for it")),
             };
             let mut parts = stream_str.split(':');
             let parse_num_stream = parts
@@ -160,8 +164,9 @@ impl InfoParser {
                             if let (Some(width_str), Some(height_str)) =
                                 (dim_vals.next(), dim_vals.next())
                             {
+                                // some annoying trailing whitespace
                                 let height_str =
-                                    height_str.split_once(' ').map_or_else(|| "", |v| v.0);
+                                    height_str.split_once(' ').map_or_else(|| height_str, |v| v.0);
                                 if let (Ok(w), Ok(h)) =
                                     (width_str.parse::<u32>(), height_str.parse::<u32>())
                                 {
@@ -182,7 +187,7 @@ impl InfoParser {
                 self.mode = ParseContext::Stateless;
                 Ok(Some(info))
             } else {
-                Err(error_on("didn't find <width>x<height> in first video Stream Output"))
+                Err(error_on("didn't find <width>x<height> in video stream"))
             };
         }
 
@@ -278,7 +283,7 @@ frame= 4026 fps=1002 q=-0.0 size=10870200kB time=00:02:14.20 bitrate=663552.0kbi
 frame=27045 fps= 1019.6 q=-0.0 size=73021500kB time=00:15:01.50 bitrate=663552.0kbits/s dup= 0 drop=5 speed=  34x"#;
 
     #[test]
-    fn test_parse_info() {
+    fn test_all_info() {
         let mut parser = InfoParser::default();
         let mut infos = parser.iter_on(TEST_INFO.lines());
 
@@ -290,6 +295,13 @@ frame=27045 fps= 1019.6 q=-0.0 size=73021500kB time=00:15:01.50 bitrate=663552.0
                 from: "media/huhu_test.mp4".to_string(),
             }))
         );
+        // codec
+        assert_eq!(
+            infos.next().unwrap(),
+            Ok(VideoInfo::Codec("[swscaler @ 0x7fb0ac4dc000] deprecated pixel format used, make sure you did set range correctly".into()))
+        );
+
+        // output
         assert_eq!(
             infos.next().unwrap(),
             Ok(VideoInfo::Output(OutputStream {
@@ -297,6 +309,7 @@ frame=27045 fps= 1019.6 q=-0.0 size=73021500kB time=00:15:01.50 bitrate=663552.0
                 to: "pipe:".to_string(),
             }))
         );
+
         // frames
         assert_eq!(
             infos.next().unwrap(),
@@ -325,5 +338,28 @@ frame=27045 fps= 1019.6 q=-0.0 size=73021500kB time=00:15:01.50 bitrate=663552.0
                 drop: Some(5),
             }))
         );
+    }
+    #[test]
+    fn test_illegal_input() {
+        assert!(InfoParser::default()
+            .iter_on(["Input #1, from 'x':\n]", "  Stream #1: Video: abc, 1X01x42 , 20 fps"])
+            .next()
+            .unwrap()
+            .is_err());
+    }
+    #[test]
+    fn test_illegal_output() {
+        assert!(InfoParser::default()
+            .iter_on(["Output #2, from 'x':\n]", "  Stream #1: Video: abc, 100x100 , 20 fps"])
+            .next()
+            .unwrap()
+            .is_err());
+    }
+    #[test]
+    fn test_illegal_frame() {
+        assert_eq!(InfoParser::default()
+            .push("frame= ---- fps=978 q=-0.0 size=10600200kB time=00:02:10.86 bitrate=663552.0kbits/s speed=32.6x")
+            .unwrap_err().reason,
+            "frame is no number".to_string());
     }
 }
