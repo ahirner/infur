@@ -2,7 +2,7 @@
 
 /// Describes one video stream
 #[derive(Debug, Clone, PartialEq)]
-struct Stream {
+pub(crate) struct Stream {
     num: u32,
     width: u32,
     height: u32,
@@ -11,21 +11,21 @@ struct Stream {
 
 /// Describes one output's video stream
 #[derive(Debug, Clone, PartialEq)]
-struct InputStream {
+pub(crate) struct InputStream {
     from: String,
     stream: Stream,
 }
 
 /// Describes one output's video stream
 #[derive(Debug, Clone, PartialEq)]
-struct OutputStream {
+pub(crate) struct OutputStream {
     to: String,
     stream: Stream,
 }
 
 /// Describes a stream's update
 #[derive(Debug, Clone, PartialEq)]
-struct FrameUpdate {
+pub(crate) struct FrameUpdate {
     frame: u64,
     fps: Option<f32>,
     dup: Option<u32>,
@@ -34,7 +34,7 @@ struct FrameUpdate {
 
 /// Describes a video's stream updates
 #[derive(Debug, Clone, PartialEq)]
-enum VideoInfo {
+pub(crate) enum VideoInfo {
     Input(InputStream),
     Output(OutputStream),
     Frame(FrameUpdate),
@@ -50,12 +50,12 @@ enum ParseContext {
 
 /// Parses ffmpeg's stdout into VideoInfo
 #[derive(Debug, Clone)]
-struct InfoParser {
+pub(crate) struct InfoParser {
     mode: ParseContext,
 }
 
 #[derive(Debug, Clone, PartialEq)]
-struct ParseError {
+pub(crate) struct ParseError {
     context: ParseContext,
     line: String,
     reason: String,
@@ -65,7 +65,7 @@ type InfoResult = Result<Option<VideoInfo>, ParseError>;
 type FilteredInfo = Result<VideoInfo, ParseError>;
 
 impl InfoParser {
-    fn default() -> Self {
+    pub fn default() -> Self {
         InfoParser { mode: ParseContext::Stateless }
     }
 
@@ -73,7 +73,7 @@ impl InfoParser {
         ParseError { context: self.mode.clone(), line: line.to_string(), reason: reason.into() }
     }
 
-    fn push(&mut self, line: &str) -> InfoResult {
+    pub fn push(&mut self, line: &str) -> InfoResult {
         let error_on = |reason| self.error_on(reason, line);
         let error_on_ = |reason| self.error_on(reason, line); // no generic closures
 
@@ -177,6 +177,9 @@ impl InfoParser {
                     }
                 }
             }
+            if !is_video {
+                return Ok(None);
+            }
             return if let Some((width, height)) = width_height {
                 let stream = Stream { num: num_stream, width, height, fps };
                 let info = if is_input {
@@ -225,9 +228,12 @@ impl InfoParser {
         }
     }
 
-    fn iter_on<'a, I>(&'a mut self, lines: I) -> impl Iterator<Item = FilteredInfo> + 'a
+    pub fn iter_on<'a, I, T: AsRef<str>>(
+        &'a mut self,
+        lines: I,
+    ) -> impl Iterator<Item = FilteredInfo> + 'a
     where
-        I: IntoIterator<Item = &'a str> + 'a,
+        I: IntoIterator<Item = T> + 'a,
     {
         fn un_opt(info: InfoResult) -> Option<FilteredInfo> {
             match info {
@@ -237,15 +243,13 @@ impl InfoParser {
             }
         }
 
-        lines.into_iter().map(|l| self.push(l)).filter_map(un_opt)
+        lines.into_iter().map(|l| self.push(l.as_ref())).filter_map(un_opt)
     }
 }
 
 #[cfg(test)]
 mod test {
-    use crate::parse::{FrameUpdate, Stream};
-
-    use super::{InfoParser, InputStream, OutputStream, VideoInfo};
+    use super::{FrameUpdate, InfoParser, InputStream, OutputStream, Stream, VideoInfo};
 
     static TEST_INFO: &str = r#"Input #0, mov,mp4,m4a,3gp,3g2,mj2, from 'media/huhu_test.mp4':
   Metadata:
@@ -361,5 +365,22 @@ frame=27045 fps= 1019.6 q=-0.0 size=73021500kB time=00:15:01.50 bitrate=663552.0
             .push("frame= ---- fps=978 q=-0.0 size=10600200kB time=00:02:10.86 bitrate=663552.0kbits/s speed=32.6x")
             .unwrap_err().reason,
             "frame is no number".to_string());
+    }
+
+    /// More test cases by sampling: https://gist.github.com/jsturgis/3b19447b304616f18657
+    static BULL_RUN: &str = r#"Input #0, mov,mp4,m4a,3gp,3g2,mj2, from 'http://commondatastorage.googleapis.com/gtv-videos-bucket/sample/WeAreGoingOnBullrun.mp4':
+  Metadata:
+    major_brand     : mp42
+    minor_version   : 0
+    compatible_brands: isomavc1mp42
+    creation_time   : 2010-06-28T18:32:12.000000Z
+  Duration: 00:00:47.46, start: 0.000000, bitrate: 2222 kb/s
+  Stream #0:0(und): Audio: aac (LC) (mp4a / 0x6134706D), 44100 Hz, stereo, fltp, 125 kb/s (default)"#;
+
+    #[test]
+    fn test_bull_run_audio_input() {
+        for info in InfoParser::default().iter_on(BULL_RUN.lines()) {
+            info.unwrap();
+        }
     }
 }
