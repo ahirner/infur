@@ -9,18 +9,11 @@ pub(crate) struct Stream {
     fps: Option<f32>,
 }
 
-/// Describes one output's video stream
+/// Describe in- or output video stream
 #[derive(Debug, Clone, PartialEq)]
-pub(crate) struct InputStream {
-    from: String,
-    stream: Stream,
-}
-
-/// Describes one output's video stream
-#[derive(Debug, Clone, PartialEq)]
-pub(crate) struct OutputStream {
-    to: String,
-    stream: Stream,
+pub(crate) enum StreamInfo {
+    Input { from: String, stream: Stream },
+    Output { to: String, stream: Stream },
 }
 
 /// Describes a stream's update
@@ -35,8 +28,7 @@ pub(crate) struct FrameUpdate {
 /// Describes a video's stream updates
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum VideoInfo {
-    Input(InputStream),
-    Output(OutputStream),
+    Stream(StreamInfo),
     Frame(FrameUpdate),
     Codec(String),
 }
@@ -183,9 +175,9 @@ impl InfoParser {
             return if let Some((width, height)) = width_height {
                 let stream = Stream { num: num_stream, width, height, fps };
                 let info = if is_input {
-                    VideoInfo::Input(InputStream { from: to_from.clone(), stream })
+                    VideoInfo::Stream(StreamInfo::Input { from: to_from.clone(), stream })
                 } else {
-                    VideoInfo::Output(OutputStream { to: to_from.clone(), stream })
+                    VideoInfo::Stream(StreamInfo::Output { to: to_from.clone(), stream })
                 };
                 self.mode = ParseContext::Stateless;
                 Ok(Some(info))
@@ -249,7 +241,7 @@ impl InfoParser {
 
 #[cfg(test)]
 mod test {
-    use super::{FrameUpdate, InfoParser, InputStream, OutputStream, Stream, VideoInfo};
+    use super::{FrameUpdate, InfoParser, Stream, StreamInfo, VideoInfo};
 
     static TEST_INFO: &str = r#"Input #0, mov,mp4,m4a,3gp,3g2,mj2, from 'media/huhu_test.mp4':
   Metadata:
@@ -294,7 +286,7 @@ frame=27045 fps= 1019.6 q=-0.0 size=73021500kB time=00:15:01.50 bitrate=663552.0
         // input
         assert_eq!(
             infos.next().unwrap(),
-            Ok(VideoInfo::Input(InputStream {
+            Ok(VideoInfo::Stream(StreamInfo::Input {
                 stream: Stream { num: 0, width: 1280, height: 720, fps: Some(29.59f32) },
                 from: "media/huhu_test.mp4".to_string(),
             }))
@@ -308,7 +300,7 @@ frame=27045 fps= 1019.6 q=-0.0 size=73021500kB time=00:15:01.50 bitrate=663552.0
         // output
         assert_eq!(
             infos.next().unwrap(),
-            Ok(VideoInfo::Output(OutputStream {
+            Ok(VideoInfo::Stream(StreamInfo::Output {
                 stream: Stream { num: 0, width: 1280, height: 720, fps: Some(30f32) },
                 to: "pipe:".to_string(),
             }))
