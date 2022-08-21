@@ -1,5 +1,7 @@
 #![allow(dead_code)]
 
+use std::{error::Error, fmt::Display};
+
 /// Describes one video stream
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct Stream {
@@ -51,6 +53,14 @@ pub(crate) struct ParseError {
     context: ParseContext,
     line: String,
     reason: String,
+}
+
+impl Error for ParseError {}
+
+impl Display for ParseError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:?}", self)
+    }
 }
 
 type InfoResult = Result<Option<VideoInfo>, ParseError>;
