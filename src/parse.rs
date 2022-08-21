@@ -6,9 +6,9 @@ use std::{error::Error, fmt::Display};
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct Stream {
     num: u32,
-    width: u32,
-    height: u32,
-    fps: Option<f32>,
+    pub width: u32,
+    pub height: u32,
+    pub fps: Option<f32>,
 }
 
 /// Describe in- or output video stream
