@@ -1,5 +1,5 @@
 use anyhow::{anyhow, Context, Result};
-use std::io::{BufRead, Read, Write};
+use std::io::{ErrorKind, Read, Write};
 use std::process::Command;
 use std::thread::JoinHandle;
 use std::time::Duration;
@@ -89,20 +89,31 @@ impl FFMpegDecoder {
             thread::Builder::new().name("VideoInfo".to_string()).spawn(move || {
                 let reader = std::io::BufReader::new(stderr);
                 let lines = reader
-                    // todo: doesn't emit frames= lines because ffmpeg terminates with
-                    // \r (CR) only if not -progress. If -progress, makes parsing more
-                    // frames stateful. Therefore look into custom bytes_line iterator:
-                    // https://github.com/whitfin/bytelines
-                    .lines()
-                    .filter_map(|line| {
-                        if let Ok(line) = line {
+                    // emit lines on either \n or \r (CR), since
+                    // ffmpeg terminates frame= lines only by \r without the -progress flag.
+                    // alternatives considered:
+                    // 1) -progress makes fields appear across lines, thus makes parsing them stateful
+                    // 2) somehow switch terminator from std-lib lines() to CR after stream header,
+                    //    but seems finicky
+                    // 3) byte-based splits could probably be done more efficiently on BufReader
+                    .bytes()
+                    .scan(vec![0u8; 0], |state, b| match b {
+                        Ok(b) if b == b'\n' || b == b'\r' => {
+                            let line = String::from_utf8_lossy(state).into_owned();
+                            state.clear();
                             Some(line)
-                        } else {
-                            event!(Level::ERROR, "couldn't read stderr {:?}", line);
+                        }
+                        Ok(b) => {
+                            state.push(b);
+                            Some(String::new())
+                        }
+                        Err(ref e) if e.kind() == ErrorKind::Interrupted => Some(String::new()),
+                        Err(e) => {
+                            event!(Level::ERROR, "couldn't read stderr {:?}", e);
                             None
                         }
                     })
-                    .inspect(|m| println!("!! {}", m));
+                    .filter(|l| !l.is_empty());
                 for msg in InfoParser::default().iter_on(lines) {
                     match msg {
                         Ok(msg) => match msg {
