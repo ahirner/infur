@@ -7,7 +7,7 @@ use std::{ffi::OsStr, thread};
 
 mod parse;
 use bus::Bus;
-use parse::{FrameUpdate, InfoParser, Stream, StreamInfo, VideoInfo};
+use parse::{FFMpegLineIter, FrameUpdate, InfoParser, Stream, StreamInfo, VideoInfo};
 use tracing::{event, Level};
 
 struct FFMpegDecoder {
@@ -66,6 +66,11 @@ impl FFMpegDecoderBuilder {
         // piping
         use std::process::Stdio;
         self.cmd.stderr(Stdio::piped()).stdout(Stdio::piped()).stdin(Stdio::piped());
+        // todo: rm
+        eprintln!(
+            "ffmpeg {}",
+            self.cmd.get_args().map(|s| s.to_string_lossy()).collect::<Vec<_>>().join(" ")
+        );
         self.cmd
     }
 }
@@ -75,73 +80,53 @@ impl FFMpegDecoder {
         let mut cmd = builder.cmd();
         let mut child = cmd.spawn()?;
         let stderr = child.stderr.take().with_context(|| "couldn't take stderr pipe")?;
-        // we have three semenatics depending on the message type:
+        // The semenatics depending on the message type:
         // - stream info: must be delivered until the recv hangs up (and isn't interested anymore)
+        // - parse errors: log but otherwise treat like stream info
+        // - read errors: log and but fuilter
         // - frame updates: can be delivered and drop if not recvd
         // - codec info: log as info
-        // - errors: log but otherwise treat like stream info
         let (stream_info_tx, stream_info_rx) =
             std::sync::mpsc::sync_channel::<Result<StreamInfo>>(2);
         let mut frame_updates = Bus::<FrameUpdate>::new(5);
         //let frame_rx = frame_updates.add_rx();
 
-        let info_thread =
-            thread::Builder::new().name("VideoInfo".to_string()).spawn(move || {
-                let reader = std::io::BufReader::new(stderr);
-                let lines = reader
-                    // emit lines on either \n or \r (CR), since
-                    // ffmpeg terminates frame= lines only by \r without the -progress flag.
-                    // alternatives considered:
-                    // 1) -progress makes fields appear across lines, thus makes parsing them stateful
-                    // 2) somehow switch terminator from std-lib lines() to CR after stream header,
-                    //    but seems finicky
-                    // 3) byte-based splits could probably be done more efficiently on BufReader
-                    .bytes()
-                    .scan(vec![0u8; 0], |state, b| match b {
-                        Ok(b) if b == b'\n' || b == b'\r' => {
-                            let line = String::from_utf8_lossy(state).into_owned();
-                            state.clear();
-                            Some(line)
+        let info_thread = thread::Builder::new().name("Video".to_string()).spawn(move || {
+            let reader = std::io::BufReader::new(stderr);
+            let lines = reader.bytes().ffmpeg_lines().filter_map(|r| match r {
+                Err(e) => {
+                    event!(Level::ERROR, "couldn't read stderr {:?}", e);
+                    None
+                }
+                Ok(r) => Some(r),
+            });
+            //.inspect(|x| println!("!! {}", x));
+            for msg in InfoParser::default().iter_on(lines) {
+                match msg {
+                    Ok(msg) => match msg {
+                        VideoInfo::Stream(msg) => {
+                            _ = stream_info_tx.send(Ok(msg)).map_err(|e| {
+                                event!(Level::WARN, "could not send stream info: {:?}", e)
+                            });
                         }
-                        Ok(b) => {
-                            state.push(b);
-                            Some(String::new())
+                        VideoInfo::Frame(msg) => {
+                            event!(Level::INFO, "{:?}", msg);
+                            _ = frame_updates.try_broadcast(msg);
                         }
-                        Err(ref e) if e.kind() == ErrorKind::Interrupted => Some(String::new()),
-                        Err(e) => {
-                            event!(Level::ERROR, "couldn't read stderr {:?}", e);
-                            None
+                        VideoInfo::Codec(msg) => {
+                            event!(Level::INFO, "codec: {}", msg);
                         }
-                    })
-                    .filter(|l| !l.is_empty());
-                for msg in InfoParser::default().iter_on(lines) {
-                    match msg {
-                        Ok(msg) => match msg {
-                            VideoInfo::Stream(msg) => {
-                                _ = stream_info_tx.send(Ok(msg)).map_err(|e| {
-                                    event!(Level::WARN, "could not send stream info: {:?}", e)
-                                });
-                            }
-                            VideoInfo::Frame(msg) => {
-                                event!(Level::INFO, "{:?}", msg);
-                                _ = frame_updates.try_broadcast(msg);
-                            }
-                            VideoInfo::Codec(msg) => {
-                                event!(Level::INFO, "codec: {}", msg);
-                            }
-                        },
-                        Err(e) => {
-                            event!(Level::ERROR, "parsing video update: {:?}", e);
-                            _ = stream_info_tx
-                                .send(Err(e).with_context(|| "video parsing"))
-                                .map_err(|e| {
-                                    event!(Level::WARN, "could not send parsing error: {:?}", e)
-                                });
-                        }
+                    },
+                    Err(e) => {
+                        event!(Level::ERROR, "parsing video update: {:?}", e);
+                        _ = stream_info_tx.send(Err(e).with_context(|| "video parsing")).map_err(
+                            |e| event!(Level::WARN, "could not send parsing error: {:?}", e),
+                        );
                     }
                 }
-                event!(Level::INFO, "finished reading stderr");
-            })?;
+            }
+            event!(Level::INFO, "finished reading stderr");
+        })?;
 
         // determine output
         let (video_output, to) = loop {
@@ -162,10 +147,16 @@ impl FFMpegDecoder {
     /// stop process gracefully and await exit code
     fn close(mut self) -> Result<()> {
         let mut stdin = self.child.stdin.take().with_context(|| "couldn't take stdin pipe")?;
-        // we may send graceful quit message and when dropped, buffer is flushed
-        // afterwards, closing stdin on wait() won't break output pipe since ffmpeg
-        // has already hung up
-        stdin.write_all(b"q")?;
+        // to close, we first send quit message (stdin is available since we encode nothing from it)
+        // any stdin buffer is flushed in the drop() of wait()
+        // thus it should break output pipe since ffmpeg has already hung up
+        match stdin.write_all(b"q") {
+            Ok(_) => {}
+            Err(e) if e.kind() == ErrorKind::BrokenPipe => {} // process probably already exited
+            Err(e) => {
+                Err(e).with_context(|| "Couldn't send q to process")?;
+            }
+        };
         //  ... unless we don't drain stdout as well, which we do here
         self.stdout.bytes().for_each(|_| {});
 
@@ -184,17 +175,13 @@ impl FFMpegDecoder {
         let mut buffer = vec![0u8; buflen].into_boxed_slice();
         self.stdout.read_exact(buffer.as_mut())?;
         self.frame_counter += 1;
-        Ok(Frame {
-            id: self.frame_counter,
-            width: self.video_output.width,
-            height: self.video_output.height,
-            buffer,
-        })
+        Ok(Frame { id: self.frame_counter, width, height, buffer })
     }
 }
 
 fn init_logs() {
-    let format = tracing_subscriber::fmt::format().with_thread_names(true).compact();
+    let format =
+        tracing_subscriber::fmt::format().with_thread_names(true).with_target(false).compact();
     tracing_subscriber::fmt().event_format(format).init();
 }
 
@@ -204,10 +191,23 @@ fn main() -> Result<()> {
     let builder = FFMpegDecoderBuilder::new().input(args);
     let mut vid = FFMpegDecoder::try_new(builder)?;
     for i in 0..1000 {
-        let frame = vid.read_frame();
-        if i % 100 == 0 {
-            println!("{:?}", frame.map(|f| (f.id, f.width, f.height, f.buffer[500])));
-        }
+        match vid.read_frame() {
+            Ok(frame) if (i % 100 == 0) => {
+                event!(
+                    Level::INFO,
+                    "({},{},{},{})",
+                    frame.id,
+                    frame.width,
+                    frame.height,
+                    frame.buffer[500]
+                );
+            }
+            Ok(_) => {}
+            Err(e) => {
+                event!(Level::WARN, "{:?}", e);
+                break;
+            }
+        };
     }
     vid.close()?;
 

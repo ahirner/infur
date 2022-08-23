@@ -249,6 +249,62 @@ impl InfoParser {
     }
 }
 
+/// Blanket implementation for lines of ffmpeg's default stderr bytes.
+pub(crate) trait FFMpegLineIter: Iterator {
+    /// Emit lines on \n, \r (CR) or both but never emtpy lines.
+    fn ffmpeg_lines(self) -> FFMpegLines<Self>
+    where
+        Self: Sized,
+    {
+        FFMpegLines { inner: self, state: Vec::<u8>::new() }
+    }
+}
+
+impl<I: Iterator> FFMpegLineIter for I {}
+
+pub(crate) struct FFMpegLines<I>
+where
+    I: Sized,
+{
+    inner: I,
+    state: Vec<u8>,
+}
+
+/// Since ffmpeg terminates frame= lines only by \r without the -progress flag.
+/// Alternatives considered:
+/// 1) -progress makes fields appear across lines, thus makes parsing them stateful
+/// 2) somehow switch terminator from std-lib lines() to CR after stream header,
+///    but seems finicky
+/// 3) byte-based splits could probably be done more efficiently on BufReader
+impl<I> Iterator for FFMpegLines<I>
+where
+    I: Iterator<Item = std::io::Result<u8>>,
+{
+    type Item = std::io::Result<String>;
+    fn next(&mut self) -> Option<Self::Item> {
+        for next_byte in self.inner.by_ref() {
+            match next_byte {
+                Ok(b) if b == b'\n' || b == b'\r' => {
+                    if !self.state.is_empty() {
+                        let line = String::from_utf8_lossy(&self.state).into_owned();
+                        self.state.clear();
+                        return Some(Ok(line));
+                    }
+                }
+                Ok(b) => {
+                    self.state.push(b);
+                }
+                // ignore such Err like .lines()
+                Err(ref e) if e.kind() == std::io::ErrorKind::Interrupted => {}
+                Err(e) => {
+                    return Some(Err(e));
+                }
+            };
+        }
+        None
+    }
+}
+
 #[cfg(test)]
 mod test {
     use super::{FrameUpdate, InfoParser, Stream, StreamInfo, VideoInfo};
@@ -384,5 +440,19 @@ frame=27045 fps= 1019.6 q=-0.0 size=73021500kB time=00:15:01.50 bitrate=663552.0
         for info in InfoParser::default().iter_on(BULL_RUN.lines()) {
             info.unwrap();
         }
+    }
+
+    #[test]
+    fn test_ffmpeg_lines() {
+        use super::FFMpegLineIter;
+
+        let mut lines =
+            b"foo\nbar\n\rbaz\rbaf\r".iter().map(|b| std::io::Result::Ok(*b)).ffmpeg_lines();
+
+        assert_eq!(lines.next().unwrap().unwrap(), "foo");
+        assert_eq!(lines.next().unwrap().unwrap(), "bar");
+        assert_eq!(lines.next().unwrap().unwrap(), "baz");
+        assert_eq!(lines.next().unwrap().unwrap(), "baf");
+        assert!(lines.next().is_none());
     }
 }
