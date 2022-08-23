@@ -1,12 +1,16 @@
-use anyhow::{anyhow, Context, Result};
 use std::io::{ErrorKind, Read, Write};
 use std::process::Command;
 use std::thread::JoinHandle;
 use std::time::Duration;
 use std::{ffi::OsStr, thread};
 
+mod image_bgr;
 mod parse;
+
+use anyhow::{anyhow, Context, Result};
 use bus::Bus;
+use image::ImageBuffer;
+use image_bgr::BgrImage;
 use parse::{FFMpegLineIter, FrameUpdate, InfoParser, Stream, StreamInfo, VideoInfo};
 use tracing::{event, Level};
 
@@ -21,14 +25,6 @@ struct FFMpegDecoder {
 
 struct FFMpegDecoderBuilder {
     cmd: Command,
-}
-
-#[derive(Clone)]
-struct Frame {
-    id: u64,
-    width: u32,
-    height: u32,
-    buffer: Box<[u8]>,
 }
 
 impl FFMpegDecoderBuilder {
@@ -169,13 +165,19 @@ impl FFMpegDecoder {
         }
     }
 
-    fn read_frame(&mut self) -> Result<Frame> {
+    fn empty_image(&self) -> BgrImage {
         let (width, height) = (self.video_output.width, self.video_output.height);
-        let buflen = (width as usize) * (height as usize) * 3;
-        let mut buffer = vec![0u8; buflen].into_boxed_slice();
-        self.stdout.read_exact(buffer.as_mut())?;
+        let img_rgb: image::RgbImage = ImageBuffer::new(width, height);
+        BgrImage::new(img_rgb)
+    }
+
+    /// Write new image and return its frame id.
+    fn read_frame(&mut self, image: &mut BgrImage) -> Result<u64> {
+        self.stdout
+            .read_exact(image.as_mut())
+            .with_context(|| "error reading full frame from video process")?;
         self.frame_counter += 1;
-        Ok(Frame { id: self.frame_counter, width, height, buffer })
+        Ok(self.frame_counter)
     }
 }
 
@@ -190,17 +192,11 @@ fn main() -> Result<()> {
     let args = std::env::args().skip(1);
     let builder = FFMpegDecoderBuilder::new().input(args);
     let mut vid = FFMpegDecoder::try_new(builder)?;
+    let mut img = vid.empty_image();
     for i in 0..1000 {
-        match vid.read_frame() {
-            Ok(frame) if (i % 100 == 0) => {
-                event!(
-                    Level::INFO,
-                    "({},{},{},{})",
-                    frame.id,
-                    frame.width,
-                    frame.height,
-                    frame.buffer[500]
-                );
+        match vid.read_frame(&mut img) {
+            Ok(id) if (i % 100 == 0) => {
+                event!(Level::INFO, "{}, {:?}", id, img.dimensions());
             }
             Ok(_) => {}
             Err(e) => {
