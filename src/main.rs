@@ -9,6 +9,7 @@ mod parse;
 
 use anyhow::{anyhow, Context, Result};
 use bus::Bus;
+use image::imageops::FilterType;
 use image::ImageBuffer;
 use image_bgr::BgrImage;
 use parse::{FFMpegLineIter, FrameUpdate, InfoParser, Stream, StreamInfo, VideoInfo};
@@ -167,8 +168,7 @@ impl FFMpegDecoder {
 
     fn empty_image(&self) -> BgrImage {
         let (width, height) = (self.video_output.width, self.video_output.height);
-        let img_rgb: image::RgbImage = ImageBuffer::new(width, height);
-        BgrImage::new(img_rgb)
+        ImageBuffer::new(width, height)
     }
 
     /// Write new image and return its frame id.
@@ -193,17 +193,11 @@ fn main() -> Result<()> {
     let builder = FFMpegDecoderBuilder::new().input(args);
     let mut vid = FFMpegDecoder::try_new(builder)?;
     let mut img = vid.empty_image();
-    for i in 0..1000 {
-        match vid.read_frame(&mut img) {
-            Ok(id) if (i % 100 == 0) => {
-                event!(Level::INFO, "{}, {:?}", id, img.dimensions());
-            }
-            Ok(_) => {}
-            Err(e) => {
-                event!(Level::WARN, "{:?}", e);
-                break;
-            }
-        };
+
+    for _ in 0..10 {
+        let _id = vid.read_frame(&mut img)?;
+        let (nwidth, nheight) = (img.width() / 2, img.height() / 2);
+        let _img_scaled = image::imageops::resize(&img, nwidth, nheight, FilterType::Nearest);
     }
     vid.close()?;
 
