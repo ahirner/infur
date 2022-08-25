@@ -194,10 +194,26 @@ fn main() -> Result<()> {
     let mut vid = FFMpegDecoder::try_new(builder)?;
     let mut img = vid.empty_image();
 
+    use tract_onnx::prelude::*;
+    // NHWC
+    let img_shape = [1, (img.height() / 2) as _, (img.width() / 2) as _, 3];
+
+    let img_shape_fact = ShapeFact::from_dims(img_shape);
+    let model = tract_onnx::onnx()
+        .model_for_path("models/mobilenet.onnx")?
+        // aka image in NHWC(BGR<u8>)
+        .with_input_fact(0, InferenceFact::dt_shape(u8::datum_type(), img_shape_fact.to_tvec()))?
+        .into_optimized()?
+        .into_runnable()?;
+
     for _ in 0..10 {
         let _id = vid.read_frame(&mut img)?;
-        let (nwidth, nheight) = (img.width() / 2, img.height() / 2);
-        let _img_scaled = image::imageops::resize(&img, nwidth, nheight, FilterType::Nearest);
+        let (nwidth, nheight) = (img_shape[2] as _, img_shape[1] as _);
+        let img_scaled = image::imageops::resize(&img, nwidth, nheight, FilterType::Nearest);
+        let ten_scaled =
+            tract_ndarray::Array4::from_shape_vec(img_shape, img_scaled.to_vec())?.into();
+        let result = model.run(tvec![ten_scaled])?;
+        println!("result: {:?}", result);
     }
     vid.close()?;
 
