@@ -206,16 +206,21 @@ fn main() -> Result<()> {
         .into_optimized()?
         .into_runnable()?;
 
-    for _ in 0..10 {
+    let t0 = std::time::Instant::now();
+    let (nwidth, nheight) = (img_shape[2] as _, img_shape[1] as _);
+    let frames_max = 10;
+    for _ in 0..frames_max {
         let _id = vid.read_frame(&mut img)?;
-        let (nwidth, nheight) = (img_shape[2] as _, img_shape[1] as _);
         let img_scaled = image::imageops::resize(&img, nwidth, nheight, FilterType::Nearest);
         let ten_scaled =
             tract_ndarray::Array4::from_shape_vec(img_shape, img_scaled.to_vec())?.into();
         let result = model.run(tvec![ten_scaled])?;
         println!("result: {:?}", result);
     }
+
+    let inf_time = (std::time::Instant::now() - t0).as_secs_f64() / (frames_max) as f64;
     vid.close()?;
 
+    println!("video read+scale+model latency {nwidth}x{nheight}: {inf_time}");
     Ok(())
 }
