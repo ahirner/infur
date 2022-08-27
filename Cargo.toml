@@ -1,20 +1,8 @@
-[package]
-name = "infurr"
-version = "0.1.0"
-edition = "2021"
-
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
-
-[dependencies]
-anyhow = "1.0"
-bus = "2.0"
-image = "0.24"
-tracing = "0.1"
-tracing-subscriber = "0.3"
-tract-onnx = "0.17"
+[workspace]
+members = ["infur", "ff-video", "image-ext"]
 
 [profile.dev.package]
-image = { opt-level = 3 }
+image-ext = { opt-level = 3 }
 tract-core = { opt-level = 3 }
 tract-onnx = { opt-level = 3 }
 tract-onnx-opl = { opt-level = 3 }

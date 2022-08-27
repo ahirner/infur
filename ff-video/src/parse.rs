@@ -4,7 +4,7 @@ use std::{error::Error, fmt::Display};
 
 /// Describes one video stream
 #[derive(Debug, Clone, PartialEq)]
-pub(crate) struct Stream {
+pub struct Stream {
     num: u32,
     pub width: u32,
     pub height: u32,
@@ -13,14 +13,14 @@ pub(crate) struct Stream {
 
 /// Describe in- or output video stream
 #[derive(Debug, Clone, PartialEq)]
-pub(crate) enum StreamInfo {
+pub enum StreamInfo {
     Input { from: String, stream: Stream },
     Output { to: String, stream: Stream },
 }
 
 /// Describes a stream's update
 #[derive(Debug, Clone, PartialEq)]
-pub(crate) struct FrameUpdate {
+pub struct FrameUpdate {
     frame: u64,
     fps: Option<f32>,
     dup: Option<u32>,
@@ -29,7 +29,7 @@ pub(crate) struct FrameUpdate {
 
 /// Describes a video's stream updates
 #[derive(Debug, Clone, PartialEq)]
-pub(crate) enum VideoInfo {
+pub enum VideoInfo {
     Stream(StreamInfo),
     Frame(FrameUpdate),
     Codec(String),
@@ -49,7 +49,7 @@ pub(crate) struct InfoParser {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub(crate) struct ParseError {
+pub struct ParseError {
     context: ParseContext,
     line: String,
     reason: String,
@@ -63,8 +63,8 @@ impl Display for ParseError {
     }
 }
 
-type InfoResult = Result<Option<VideoInfo>, ParseError>;
-type FilteredInfo = Result<VideoInfo, ParseError>;
+type InfoResult = std::result::Result<Option<VideoInfo>, ParseError>;
+pub type Result = std::result::Result<VideoInfo, ParseError>;
 
 impl InfoParser {
     pub fn default() -> Self {
@@ -233,11 +233,11 @@ impl InfoParser {
     pub fn iter_on<'a, I, T: AsRef<str>>(
         &'a mut self,
         lines: I,
-    ) -> impl Iterator<Item = FilteredInfo> + 'a
+    ) -> impl Iterator<Item = Result> + 'a
     where
         I: IntoIterator<Item = T> + 'a,
     {
-        fn un_opt(info: InfoResult) -> Option<FilteredInfo> {
+        fn un_opt(info: InfoResult) -> Option<Result> {
             match info {
                 Err(e) => Some(Err(e)),
                 Ok(Some(m)) => Some(Ok(m)),
