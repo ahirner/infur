@@ -1,17 +1,16 @@
 [package]
-name = "infur"
+name = "compare"
 version = "0.1.0"
 edition = "2021"
-description = "show case onnx model inference on video stream"
-
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+description = "compare different onnx runtimes"
 
 [dependencies]
-stable-eyre = "0.2"
+anyhow = "1.0"
+pico-args = "0.5"
 tracing-subscriber = "0.3"
-eframe = { version = "0.19", features = ["wgpu"] }
 # need onnxruntime .14 for 0-dim input tolerance (not in .13),
 # then furhtermore need master to resolve ndarray with tract-core...
 onnxruntime = { git = "https://github.com/nbigaouette/onnxruntime-rs" }
+tract-onnx = "0.17"
 image-ext = { path = "../image-ext" }
 ff-video = { path = "../ff-video" }

@@ -1,8 +1,10 @@
 [workspace]
 members = ["infur", "ff-video", "image-ext"]
+resolver = "2"
 
 [profile.dev.package]
 image-ext = { opt-level = 3 }
 tract-core = { opt-level = 3 }
 tract-onnx = { opt-level = 3 }
 tract-onnx-opl = { opt-level = 3 }
+backtrace = { opt-level = 3 }
