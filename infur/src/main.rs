@@ -1,13 +1,14 @@
-use std::sync::{Arc, Mutex};
+use std::sync::{mpsc::Receiver, Arc, Mutex};
 
 use eframe::{
-    egui::{SidePanel, Slider},
+    egui::{CentralPanel, SidePanel, Slider, TextureFilter},
+    epaint::ColorImage,
     NativeOptions,
 };
 use stable_eyre::eyre::Report;
 
 use ff_video::{FFMpegDecoder, FFMpegDecoderBuilder};
-use image_ext::{imageops::FilterType, BgrImage};
+use image_ext::{imageops::FilterType, BgrImage, Pixel};
 
 type Result<T> = std::result::Result<T, Report>;
 
@@ -74,7 +75,10 @@ fn init_logs() -> Result<()> {
     Ok(())
 }
 
-struct InFur {}
+struct InFur {
+    frame_rx: Receiver<ff_video::VideoResult<Frame>>,
+    last_frame: Option<Frame>,
+}
 
 impl eframe::App for InFur {
     fn update(&mut self, ctx: &eframe::egui::Context, _frame: &mut eframe::Frame) {
@@ -85,8 +89,29 @@ impl eframe::App for InFur {
             sidebar.add(slider);
             sidebar.label("Test");
         });
+
+        if let Ok(Ok(frame)) = self.frame_rx.try_recv() {
+            println!("{}", frame.id);
+            self.last_frame = Some(frame);
+        }
+        if let Some(frame) = &mut self.last_frame {
+            CentralPanel::default().show(ctx, |image_area| {
+                // todo: call outside of GUI
+                let tex = image_area.ctx().load_texture(
+                    "frame",
+                    frame.buffer.clone(),
+                    TextureFilter::Linear,
+                );
+                image_area.image(&tex, image_area.available_size());
+            });
+        };
         ctx.request_repaint();
     }
+}
+
+struct Frame {
+    id: u64,
+    buffer: ColorImage,
 }
 
 fn main() -> Result<()> {
@@ -94,27 +119,35 @@ fn main() -> Result<()> {
     let args = std::env::args_os().skip(1);
     let builder = FFMpegDecoderBuilder::default().input(args);
     let vid = Arc::new(Mutex::new(Some(FFMpegDecoder::try_new(builder)?)));
+    let (frame_tx, frame_rx) = std::sync::mpsc::sync_channel(2);
 
     let thread_vid = vid.clone();
     let infur_thread = std::thread::spawn(move || {
         let mut img = thread_vid.lock().unwrap().as_mut().unwrap().empty_image();
-        //let img_shape = [1, (img.height() / 2) as _, (img.width() / 2) as _, 3];
-        //let (nwidth, nheight) = (img_shape[2], img_shape[1]);
+        let img_shape = [1, (img.height()) as _, (img.width()) as _, 3];
+        let (nwidth, nheight) = (img_shape[2], img_shape[1]);
         loop {
             let mut guard = thread_vid.lock().unwrap();
             if let Some(ref mut vid) = guard.as_mut().take() {
                 let id = vid.read_frame(&mut img);
-                match id {
-                    Ok(_) => {}
-                    Err(_) => break,
-                }
+                let frame = match id {
+                    Ok(id) => {
+                        // todo: bgr->rgba
+                        let pixels = img.pixels().flat_map(|p| p.to_rgba().0).collect::<Vec<_>>();
+                        let buffer = ColorImage::from_rgba_unmultiplied([nwidth, nheight], &pixels);
+                        Ok(Frame { id, buffer })
+                    }
+                    Err(e) => Err(e),
+                };
+                // todo: broadcast or drop here?
+                let _ = frame_tx.try_send(frame);
             } else {
                 return;
             };
         }
     });
 
-    let app = InFur {};
+    let app = InFur { frame_rx, last_frame: None };
     let window_opts = NativeOptions::default();
     eframe::run_native("InFur", window_opts, Box::new(|_| Box::new(app)));
 
