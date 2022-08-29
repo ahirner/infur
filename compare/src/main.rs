@@ -44,7 +44,7 @@ fn infer_tract(
     let (nwidth, nheight) = (img_shape[2] as _, img_shape[1] as _);
     let img_shape_fact = ShapeFact::from_dims(img_shape);
     let model = tract_onnx::onnx()
-        .model_for_path("models/mobilenet.onnx")?
+        .model_for_path("../models/mobilenet.onnx")?
         // aka image in NHWC(BGR<u8>)
         .with_input_fact(0, InferenceFact::dt_shape(u8::datum_type(), img_shape_fact.to_tvec()))?
         .into_optimized()?
@@ -82,7 +82,7 @@ fn infer_onnx(
         .new_session_builder()?
         .with_optimization_level(GraphOptimizationLevel::Extended)?
         .with_number_threads(opts.threads.into())?
-        .with_model_from_file("models/mobilenet.onnx")
+        .with_model_from_file("../models/mobilenet.onnx")
         .unwrap();
 
     eprintln!("model session {:?}", session);

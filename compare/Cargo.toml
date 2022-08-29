@@ -1,3 +1,6 @@
+[workspace]
+resolver = "2"
+
 [package]
 name = "compare"
 version = "0.1.0"
@@ -14,3 +17,9 @@ onnxruntime = { git = "https://github.com/nbigaouette/onnxruntime-rs" }
 tract-onnx = "0.17"
 image-ext = { path = "../image-ext" }
 ff-video = { path = "../ff-video" }
+
+[profile.dev.package]
+image-ext = { opt-level = 3 }
+tract-core = { opt-level = 3 }
+tract-onnx = { opt-level = 3 }
+tract-onnx-opl = { opt-level = 3 }
