@@ -82,18 +82,22 @@ struct InFur {
 
 impl eframe::App for InFur {
     fn update(&mut self, ctx: &eframe::egui::Context, _frame: &mut eframe::Frame) {
+        if let Ok(Ok(frame)) = self.frame_rx.try_recv() {
+            self.last_frame = Some(frame);
+        }
+
         SidePanel::left("Options").show(ctx, |sidebar| {
             sidebar.spacing_mut().item_spacing.y = 10.0;
             let mut value = 0.5;
             let slider = Slider::new(&mut value, 0f32..=1.0).step_by(0.01f64).text("min_conf");
             sidebar.add(slider);
-            sidebar.label("Test");
+            let frame_counter = &self
+                .last_frame
+                .as_ref()
+                .map_or_else(|| "..waiting".to_string(), |f| f.id.to_string());
+            sidebar.label(frame_counter);
         });
 
-        if let Ok(Ok(frame)) = self.frame_rx.try_recv() {
-            println!("{}", frame.id);
-            self.last_frame = Some(frame);
-        }
         if let Some(frame) = &mut self.last_frame {
             CentralPanel::default().show(ctx, |image_area| {
                 // todo: call outside of GUI
