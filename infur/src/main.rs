@@ -7,10 +7,11 @@ use eframe::{
 };
 use stable_eyre::eyre::{eyre, Report};
 
-use ff_video::{FFMpegDecoder, FFMpegDecoderBuilder, VideoResult};
+use ff_video::{FFMpegDecoder, FFMpegDecoderBuilder, FFVideoError, VideoResult};
 use image_ext::{imageops::FilterType, BgrImage, Pixel};
 
 type Result<T> = std::result::Result<T, Report>;
+type VideoProcResult<T> = std::result::Result<T, FFVideoError>;
 
 #[allow(dead_code)]
 fn infer_onnx(
@@ -77,37 +78,45 @@ fn init_logs() -> Result<()> {
 
 struct InFur {
     frame_rx: Receiver<VideoResult<Frame>>,
-    last_frame: Option<VideoResult<Frame>>,
-    last_texture: Option<TextureHandle>,
+    last_texture: Option<VideoProcResult<TextureFrame>>,
 }
 
 impl InFur {
     fn new(frame_rx: Receiver<ff_video::VideoResult<Frame>>) -> Self {
-        Self { frame_rx, last_frame: None, last_texture: None }
+        Self { frame_rx, last_texture: None }
     }
+}
+
+struct TextureFrame {
+    id: u64,
+    handle: TextureHandle,
 }
 
 impl eframe::App for InFur {
     fn update(&mut self, ctx: &eframe::egui::Context, _frame: &mut eframe::Frame) {
-        // update last_frame
+        // update text from new frame
         if let Ok(frame) = self.frame_rx.try_recv() {
-            self.last_frame = Some(frame);
-            self.last_texture = None;
+            let result = match frame {
+                Ok(frame) => Ok(TextureFrame {
+                    id: frame.id,
+                    handle: ctx.load_texture("frame", frame.buffer, TextureFilter::Linear),
+                }),
+                Err(e) => Err(FFVideoError::Processing(e)),
+            };
+
+            self.last_texture = Some(result);
         }
 
-        // update and/or show last_texture
-        if let Some(Ok(frame)) = &mut self.last_frame {
-            let tex = self.last_texture.get_or_insert_with(|| {
-                ctx.load_texture("frame", frame.buffer.clone(), TextureFilter::Linear)
-            });
+        // show last_texture
+        if let Some(Ok(tex_frame)) = &self.last_texture {
             CentralPanel::default().show(ctx, |image_area| {
-                image_area.image(tex, image_area.available_size());
+                image_area.image(&tex_frame.handle, image_area.available_size());
             });
         };
 
         // stringify last frame's status
-        let frame_status = match &self.last_frame {
-            Some(Ok(frame)) => frame.id.to_string(),
+        let frame_status = match &self.last_texture {
+            Some(Ok(tex)) => tex.id.to_string(),
             Some(Err(e)) => e.to_string(),
             None => "..waiting".to_string(),
         };
