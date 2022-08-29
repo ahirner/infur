@@ -1,13 +1,13 @@
 use std::sync::{mpsc::Receiver, Arc, Mutex};
 
 use eframe::{
-    egui::{CentralPanel, SidePanel, Slider, TextureFilter},
+    egui::{CentralPanel, SidePanel, Slider, TextureFilter, TextureHandle},
     epaint::ColorImage,
     NativeOptions,
 };
-use stable_eyre::eyre::Report;
+use stable_eyre::eyre::{eyre, Report};
 
-use ff_video::{FFMpegDecoder, FFMpegDecoderBuilder};
+use ff_video::{FFMpegDecoder, FFMpegDecoderBuilder, VideoResult};
 use image_ext::{imageops::FilterType, BgrImage, Pixel};
 
 type Result<T> = std::result::Result<T, Report>;
@@ -76,39 +76,50 @@ fn init_logs() -> Result<()> {
 }
 
 struct InFur {
-    frame_rx: Receiver<ff_video::VideoResult<Frame>>,
-    last_frame: Option<Frame>,
+    frame_rx: Receiver<VideoResult<Frame>>,
+    last_frame: Option<VideoResult<Frame>>,
+    last_texture: Option<TextureHandle>,
+}
+
+impl InFur {
+    fn new(frame_rx: Receiver<ff_video::VideoResult<Frame>>) -> Self {
+        Self { frame_rx, last_frame: None, last_texture: None }
+    }
 }
 
 impl eframe::App for InFur {
     fn update(&mut self, ctx: &eframe::egui::Context, _frame: &mut eframe::Frame) {
-        if let Ok(Ok(frame)) = self.frame_rx.try_recv() {
+        // update last_frame
+        if let Ok(frame) = self.frame_rx.try_recv() {
             self.last_frame = Some(frame);
+            self.last_texture = None;
         }
+
+        // update and/or show last_texture
+        if let Some(Ok(frame)) = &mut self.last_frame {
+            let tex = self.last_texture.get_or_insert_with(|| {
+                ctx.load_texture("frame", frame.buffer.clone(), TextureFilter::Linear)
+            });
+            CentralPanel::default().show(ctx, |image_area| {
+                image_area.image(tex, image_area.available_size());
+            });
+        };
+
+        // stringify last frame's status
+        let frame_status = match &self.last_frame {
+            Some(Ok(frame)) => frame.id.to_string(),
+            Some(Err(e)) => e.to_string(),
+            None => "..waiting".to_string(),
+        };
 
         SidePanel::left("Options").show(ctx, |sidebar| {
             sidebar.spacing_mut().item_spacing.y = 10.0;
             let mut value = 0.5;
             let slider = Slider::new(&mut value, 0f32..=1.0).step_by(0.01f64).text("min_conf");
             sidebar.add(slider);
-            let frame_counter = &self
-                .last_frame
-                .as_ref()
-                .map_or_else(|| "..waiting".to_string(), |f| f.id.to_string());
-            sidebar.label(frame_counter);
+            sidebar.label(frame_status);
         });
 
-        if let Some(frame) = &mut self.last_frame {
-            CentralPanel::default().show(ctx, |image_area| {
-                // todo: call outside of GUI
-                let tex = image_area.ctx().load_texture(
-                    "frame",
-                    frame.buffer.clone(),
-                    TextureFilter::Linear,
-                );
-                image_area.image(&tex, image_area.available_size());
-            });
-        };
         ctx.request_repaint();
     }
 }
@@ -136,7 +147,6 @@ fn main() -> Result<()> {
                 let id = vid.read_frame(&mut img);
                 let frame = match id {
                     Ok(id) => {
-                        // todo: bgr->rgba
                         let pixels = img.pixels().flat_map(|p| p.to_rgba().0).collect::<Vec<_>>();
                         let buffer = ColorImage::from_rgba_unmultiplied([nwidth, nheight], &pixels);
                         Ok(Frame { id, buffer })
@@ -151,11 +161,11 @@ fn main() -> Result<()> {
         }
     });
 
-    let app = InFur { frame_rx, last_frame: None };
+    let app = InFur::new(frame_rx);
     let window_opts = NativeOptions::default();
     eframe::run_native("InFur", window_opts, Box::new(|_| Box::new(app)));
 
     vid.lock().unwrap().take().unwrap().close()?;
-    infur_thread.join().unwrap();
+    infur_thread.join().map_err(|_| eyre!("video processing thread errored"))?;
     Ok(())
 }
