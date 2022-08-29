@@ -1,4 +1,4 @@
-use std::sync::{mpsc::Receiver, Arc, Mutex};
+use std::sync::mpsc::{Receiver, SyncSender, TryRecvError};
 
 use eframe::{
     egui::{CentralPanel, SidePanel, Slider, TextureFilter, TextureHandle},
@@ -103,7 +103,6 @@ impl eframe::App for InFur {
                 }),
                 Err(e) => Err(FFVideoError::Processing(e)),
             };
-
             self.last_texture = Some(result);
         }
 
@@ -121,6 +120,7 @@ impl eframe::App for InFur {
             None => "..waiting".to_string(),
         };
 
+        // some bogus placeholder for now
         SidePanel::left("Options").show(ctx, |sidebar| {
             sidebar.spacing_mut().item_spacing.y = 10.0;
             let mut value = 0.5;
@@ -133,48 +133,164 @@ impl eframe::App for InFur {
     }
 }
 
+/// Frame transmitted to GUI
 struct Frame {
     id: u64,
     buffer: ColorImage,
 }
 
+/// Commands transmitted to processing backend
+#[derive(Clone, Debug)]
+enum ProcCtrl {
+    /// Start or restart playing video from this ffmpeg input
+    Play(Vec<String>),
+    /// Stop whatever and return
+    Exit,
+    /// Set's the scale factor for pre-processing
+    SetScale(f32),
+}
+
+/// Manages prcoessing resources and reacts to control messages
+struct ProcessingApp {
+    scale: f32,
+    vid: Option<FFMpegDecoder>,
+    img: Option<BgrImage>,
+    id: u64,
+    input: Vec<String>,
+    to_exit: bool,
+}
+
+impl Default for ProcessingApp {
+    fn default() -> Self {
+        Self { scale: 1.0, vid: None, img: None, id: 0, input: vec![], to_exit: false }
+    }
+}
+
+impl ProcessingApp {
+    fn control(&mut self, cmd: ProcCtrl) -> VideoResult<()> {
+        match cmd {
+            ProcCtrl::Play(input) => {
+                self.close_video()?;
+                self.input = input;
+                let builder = FFMpegDecoderBuilder::default().input(self.input.clone());
+                self.vid = Some(FFMpegDecoder::try_new(builder)?);
+            }
+            ProcCtrl::Exit => {
+                self.close_video()?;
+                self.to_exit = true;
+            }
+            ProcCtrl::SetScale(s) => {
+                self.scale = s;
+            }
+        };
+        Ok(())
+    }
+
+    /// If available, read a new frame and return true
+    fn next_frame(&mut self) -> VideoResult<bool> {
+        self.vid
+            .as_mut()
+            .map(|vid| {
+                let img = self.img.get_or_insert_with(|| vid.empty_image());
+                self.id = vid.read_frame(img)?;
+                Ok(true)
+            })
+            .unwrap_or(Ok(false))
+    }
+
+    fn is_video(&self) -> bool {
+        self.vid.is_some()
+    }
+    fn close_video(&mut self) -> VideoResult<()> {
+        self.vid.take().map_or(Ok(()), |vid| vid.close())
+    }
+}
+
+fn proc_loop(
+    cmds: Receiver<ProcCtrl>,
+    frame_tx: SyncSender<ff_video::VideoResult<Frame>>,
+) -> Result<()> {
+    let mut app = ProcessingApp::default();
+
+    loop {
+        let cmd = if !app.is_video() {
+            // video is not playing, block
+            match cmds.recv() {
+                Ok(c) => Some(c),
+                Err(e) => break Err(eyre!(e)),
+            }
+        } else {
+            // video is playing, don't block
+            match cmds.try_recv() {
+                Ok(c) => Some(c),
+                Err(TryRecvError::Empty) => None,
+                Err(e) => break Err(eyre!(e)),
+            }
+        };
+        if let Some(cmd) = cmd {
+            app.control(cmd)?
+        };
+        if app.to_exit {
+            break Ok(());
+        }
+        let new_frame = match app.next_frame() {
+            Ok(new) => new,
+            Err(e) => {
+                frame_tx.send(Err(e))?;
+                false
+            }
+        };
+        // current logic is to send only new frames,
+        // later we could process also if model is available and params changed
+        if new_frame {
+            if let Some(ref img) = app.img {
+                let id = app.id;
+                let nwidth = (img.width() as f32 * app.scale) as _;
+                let nheight = (img.height() as f32 * app.scale) as _;
+
+                let img_temp;
+                let img_scaled = if nwidth == img.width() && nheight == img.height() {
+                    img
+                } else {
+                    img_temp =
+                        image_ext::imageops::resize(img, nwidth, nheight, FilterType::Nearest);
+                    &img_temp
+                };
+                // todo: own conversion trait or Color32 ImageBuffer
+                let rgba_pixels = img_scaled
+                    .pixels()
+                    .map(|p| {
+                        let cs = p.channels();
+                        eframe::epaint::Color32::from_rgb(cs[2], cs[1], cs[0])
+                    })
+                    .collect::<Vec<_>>();
+                let img_col =
+                    ColorImage { size: [nwidth as usize, nheight as usize], pixels: rgba_pixels };
+                // todo: broadcast or really drop here?
+                let frame = Frame { id, buffer: img_col };
+                let _ = frame_tx.try_send(Ok(frame));
+            }
+        }
+    }
+}
+
 fn main() -> Result<()> {
     init_logs()?;
-    let args = std::env::args_os().skip(1);
-    let builder = FFMpegDecoderBuilder::default().input(args);
-    let vid = Arc::new(Mutex::new(Some(FFMpegDecoder::try_new(builder)?)));
+    let args = std::env::args().skip(1).collect::<Vec<_>>();
     let (frame_tx, frame_rx) = std::sync::mpsc::sync_channel(2);
+    let (ctrl_tx, ctrl_rx) = std::sync::mpsc::channel();
 
-    let thread_vid = vid.clone();
-    let infur_thread = std::thread::spawn(move || {
-        let mut img = thread_vid.lock().unwrap().as_mut().unwrap().empty_image();
-        let img_shape = [1, (img.height()) as _, (img.width()) as _, 3];
-        let (nwidth, nheight) = (img_shape[2], img_shape[1]);
-        loop {
-            let mut guard = thread_vid.lock().unwrap();
-            if let Some(ref mut vid) = guard.as_mut().take() {
-                let id = vid.read_frame(&mut img);
-                let frame = match id {
-                    Ok(id) => {
-                        let pixels = img.pixels().flat_map(|p| p.to_rgba().0).collect::<Vec<_>>();
-                        let buffer = ColorImage::from_rgba_unmultiplied([nwidth, nheight], &pixels);
-                        Ok(Frame { id, buffer })
-                    }
-                    Err(e) => Err(e),
-                };
-                // todo: broadcast or drop here?
-                let _ = frame_tx.try_send(frame);
-            } else {
-                return;
-            };
-        }
-    });
+    let infur_thread = std::thread::spawn(move || proc_loop(ctrl_rx, frame_tx));
+    ctrl_tx.send(ProcCtrl::SetScale(0.5))?;
+    ctrl_tx.send(ProcCtrl::Play(args))?;
 
     let app = InFur::new(frame_rx);
     let window_opts = NativeOptions::default();
     eframe::run_native("InFur", window_opts, Box::new(|_| Box::new(app)));
 
-    vid.lock().unwrap().take().unwrap().close()?;
-    infur_thread.join().map_err(|_| eyre!("video processing thread errored"))?;
+    ctrl_tx.send(ProcCtrl::Exit)?;
+    // todo: something i didn't get from eyre..??
+    infur_thread.join().map_err(|_| eyre!("video processing thread errored"))??;
+
     Ok(())
 }
