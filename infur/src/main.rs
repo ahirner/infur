@@ -1,4 +1,4 @@
-use std::sync::mpsc::{Receiver, SyncSender, TryRecvError};
+use std::sync::mpsc::{Receiver, Sender, SyncSender, TryRecvError};
 
 use eframe::{
     egui::{CentralPanel, SidePanel, Slider, TextureFilter, TextureHandle},
@@ -77,13 +77,16 @@ fn init_logs() -> Result<()> {
 }
 
 struct InFur {
+    ctrl_tx: Sender<ProcCtrl>,
     frame_rx: Receiver<VideoResult<Frame>>,
     last_texture: Option<VideoProcResult<TextureFrame>>,
+    min_conf: f32,
+    scale: f32,
 }
 
 impl InFur {
-    fn new(frame_rx: Receiver<ff_video::VideoResult<Frame>>) -> Self {
-        Self { frame_rx, last_texture: None }
+    fn new(ctrl_tx: Sender<ProcCtrl>, frame_rx: Receiver<ff_video::VideoResult<Frame>>) -> Self {
+        Self { ctrl_tx, frame_rx, last_texture: None, min_conf: 0.5, scale: 0.5 }
     }
 }
 
@@ -108,8 +111,8 @@ impl eframe::App for InFur {
 
         // show last_texture
         if let Some(Ok(tex_frame)) = &self.last_texture {
-            CentralPanel::default().show(ctx, |image_area| {
-                image_area.image(&tex_frame.handle, image_area.available_size());
+            CentralPanel::default().show(ctx, |ui| {
+                ui.image(&tex_frame.handle, ui.available_size());
             });
         };
 
@@ -120,13 +123,25 @@ impl eframe::App for InFur {
             None => "..waiting".to_string(),
         };
 
-        // some bogus placeholder for now
-        SidePanel::left("Options").show(ctx, |sidebar| {
-            sidebar.spacing_mut().item_spacing.y = 10.0;
-            let mut value = 0.5;
-            let slider = Slider::new(&mut value, 0f32..=1.0).step_by(0.01f64).text("min_conf");
-            sidebar.add(slider);
-            sidebar.label(frame_status);
+        SidePanel::left("Options").show(ctx, |ui| {
+            ui.spacing_mut().item_spacing.y = 10.0;
+            let scale = Slider::new(&mut self.scale, 0.1f32..=1.0)
+                .step_by(0.01f64)
+                .text("scale")
+                .clamp_to_range(true);
+            ui.add(scale);
+            let min_conf = Slider::new(&mut self.min_conf, 0f32..=1.0)
+                .step_by(0.01f64)
+                .text("min_conf")
+                .clamp_to_range(true);
+            ui.add(min_conf);
+
+            // todo: only send if changed..
+            let _ = self
+                .ctrl_tx
+                .send(ProcCtrl::SetScale(self.scale))
+                .map_err(|e| ui.label(e.to_string()));
+            ui.label(frame_status);
         });
 
         ctx.request_repaint();
@@ -284,7 +299,7 @@ fn main() -> Result<()> {
     ctrl_tx.send(ProcCtrl::SetScale(0.5))?;
     ctrl_tx.send(ProcCtrl::Play(args))?;
 
-    let app = InFur::new(frame_rx);
+    let app = InFur::new(ctrl_tx.clone(), frame_rx);
     let window_opts = NativeOptions::default();
     eframe::run_native("InFur", window_opts, Box::new(|_| Box::new(app)));
 
