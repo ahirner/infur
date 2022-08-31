@@ -229,27 +229,31 @@ fn proc_loop(
     let mut app = ProcessingApp::default();
 
     loop {
-        // todo: get all commands
-        let cmd = if !app.is_video() {
-            // video is not playing, block
-            match cmds.recv() {
-                Ok(c) => Some(c),
-                Err(e) => break Err(eyre!(e)),
-            }
-        } else {
-            // video is playing, don't block
-            match cmds.try_recv() {
-                Ok(c) => Some(c),
-                Err(TryRecvError::Empty) => None,
-                Err(e) => break Err(eyre!(e)),
-            }
+        let cmds_proc = loop {
+            let cmd = if !app.is_video() {
+                // video is not playing, block
+                match cmds.recv() {
+                    Ok(c) => Some(c),
+                    Err(e) => break Some(Err(eyre!(e))),
+                }
+            } else {
+                // video is playing, don't block
+                match cmds.try_recv() {
+                    Ok(c) => Some(c),
+                    Err(TryRecvError::Empty) => break None,
+                    Err(e) => break Some(Err(eyre!(e))),
+                }
+            };
+            if let Some(cmd) = cmd {
+                app.control(cmd)?
+            };
+            if app.to_exit {
+                return Ok(());
+            };
         };
-        if let Some(cmd) = cmd {
-            app.control(cmd)?
+        if let Some(r) = cmds_proc {
+            break r;
         };
-        if app.to_exit {
-            break Ok(());
-        }
         let new_frame = match app.next_frame() {
             Ok(new) => new,
             Err(e) => {
