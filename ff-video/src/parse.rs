@@ -256,7 +256,7 @@ pub(crate) trait FFMpegLineIter: Iterator {
     where
         Self: Sized,
     {
-        FFMpegLines { inner: self, state: Vec::<u8>::new() }
+        FFMpegLines { inner: self, state: Vec::<u8>::new(), to_clear: false }
     }
 }
 
@@ -268,6 +268,13 @@ where
 {
     inner: I,
     state: Vec<u8>,
+    to_clear: bool,
+}
+
+impl<I> FFMpegLines<I> {
+    pub(crate) fn state(&self) -> &[u8] {
+        &self.state
+    }
 }
 
 /// Since ffmpeg terminates frame= lines only by \r without the -progress flag.
@@ -284,15 +291,21 @@ where
     fn next(&mut self) -> Option<Self::Item> {
         for next_byte in self.inner.by_ref() {
             match next_byte {
-                Ok(b) if b == b'\n' || b == b'\r' => {
-                    if !self.state.is_empty() {
-                        let line = String::from_utf8_lossy(&self.state).into_owned();
-                        self.state.clear();
-                        return Some(Ok(line));
-                    }
-                }
                 Ok(b) => {
-                    self.state.push(b);
+                    if self.to_clear {
+                        self.state.clear();
+                        self.to_clear = false;
+                    }
+                    if b == b'\n' || b == b'\r' {
+                        if !self.state.is_empty() {
+                            let line = String::from_utf8_lossy(&self.state).into_owned();
+                            // defear clearing state until next() time to preserve state
+                            self.to_clear = true;
+                            return Some(Ok(line));
+                        }
+                    } else {
+                        self.state.push(b);
+                    }
                 }
                 // ignore such Err like .lines()
                 Err(ref e) if e.kind() == std::io::ErrorKind::Interrupted => {}
@@ -454,5 +467,7 @@ frame=27045 fps= 1019.6 q=-0.0 size=73021500kB time=00:15:01.50 bitrate=663552.0
         assert_eq!(lines.next().unwrap().unwrap(), "baz");
         assert_eq!(lines.next().unwrap().unwrap(), "baf");
         assert!(lines.next().is_none());
+
+        assert_eq!(lines.state(), b"baf");
     }
 }

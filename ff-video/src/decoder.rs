@@ -1,7 +1,7 @@
 use std::{
     io::{ErrorKind, Read, Write},
     process::Command,
-    sync::mpsc::Receiver,
+    sync::mpsc::{Receiver, RecvTimeoutError},
     thread::{self, JoinHandle},
     time::Duration,
 };
@@ -86,7 +86,13 @@ impl FFMpegDecoder {
 
         // determine output
         let video_output = loop {
-            let msg = stream_info_rx.recv_timeout(Duration::from_secs(10))?;
+            let msg = stream_info_rx.recv_timeout(Duration::from_secs(10)).map_err(|e| {
+                let why = match e {
+                    RecvTimeoutError::Timeout => "timeout",
+                    RecvTimeoutError::Disconnected => "disconnected",
+                };
+                VideoProcError::Start(why.to_string())
+            })?;
             if let Ok(StreamInfo::Output { stream, .. }) = msg {
                 break stream;
             };
@@ -161,14 +167,15 @@ where
         .name("Video".to_string())
         .spawn(move || {
             let reader = std::io::BufReader::new(stderr);
-            let lines = reader.bytes().ffmpeg_lines().filter_map(|r| match r {
+            let mut ffmpeg_lines = reader.bytes().ffmpeg_lines();
+            let lines = ffmpeg_lines.by_ref().filter_map(|r| match r {
                 Err(e) => {
                     error!("couldn't read stderr {:?}", e);
                     None
                 }
                 Ok(r) => Some(r),
             });
-            //.inspect(|x| println!("!! {}", x));
+            //.inspect(|l| println!("!!{}", l));
 
             // Delivery semantics depend on the message type:
             // - Stream and Error: must be delivered until the recv hangs up (thus isn't interested anymore)
@@ -190,7 +197,8 @@ where
                     }
                 };
             }
-            info!("finished reading stderr");
+            let last_line = String::from_utf8_lossy(ffmpeg_lines.state());
+            info!("finished reading stderr: {}", last_line);
         })
         .map_err(|e| VideoProcError::explain_io("couldn't spawn info parsing thread", e))?;
     Ok((stream_info_rx, info_thread))

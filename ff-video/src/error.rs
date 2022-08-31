@@ -14,8 +14,8 @@ pub enum VideoProcError {
         #[source]
         source: std::io::Error,
     },
-    #[error("couldn't parse and transmit stream info within deadline")]
-    TimeOut(#[from] std::sync::mpsc::RecvTimeoutError),
+    #[error("couldn't parse stream info within deadline ({0})")]
+    Start(String),
     #[error("couldn't obtain {0}")]
     MissingValue(String),
     #[error("video process exit code: {0}")]
