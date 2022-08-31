@@ -14,7 +14,12 @@ pub enum VideoProcError {
         #[source]
         source: std::io::Error,
     },
-    #[error("couldn't parse stream info within deadline ({0})")]
+    #[error("couldn't read an entire image")]
+    ExactReadError {
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("couldn't parse stream info in time ({0})")]
     Start(String),
     #[error("couldn't obtain {0}")]
     MissingValue(String),

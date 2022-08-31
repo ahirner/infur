@@ -22,7 +22,7 @@ pub struct FFMpegDecoderBuilder {
 pub struct FFMpegDecoder {
     child: std::process::Child,
     stdout: std::process::ChildStdout,
-    info_thread: JoinHandle<()>,
+    info_thread: JoinHandle<String>,
     pub frame_counter: u64,
     pub video_output: Stream,
 }
@@ -85,17 +85,29 @@ impl FFMpegDecoder {
         let (stream_info_rx, info_thread) = spawn_info_thread(stderr)?;
 
         // determine output
+        let mut final_line = None;
         let video_output = loop {
-            let msg = stream_info_rx.recv_timeout(Duration::from_secs(10)).map_err(|e| {
-                let why = match e {
-                    RecvTimeoutError::Timeout => "timeout",
-                    RecvTimeoutError::Disconnected => "disconnected",
-                };
-                VideoProcError::Start(why.to_string())
-            })?;
-            if let Ok(StreamInfo::Output { stream, .. }) = msg {
+            let msg = match stream_info_rx.recv_timeout(Duration::from_secs(10)) {
+                Ok(msg) => msg,
+                Err(e) => {
+                    let why = match e {
+                        RecvTimeoutError::Timeout => "timeout",
+                        RecvTimeoutError::Disconnected => "disconnected",
+                    };
+
+                    let explanation = match final_line {
+                        None => why.to_string(),
+                        Some(line) => format!("{why} - {line}"),
+                    };
+                    return Err(VideoProcError::Start(explanation));
+                }
+            };
+            if let Ok(StreamInfoTerm::Info(StreamInfo::Output { stream, .. })) = msg {
                 break stream;
             };
+            if let Ok(StreamInfoTerm::Final(line)) = msg {
+                final_line = Some(line);
+            }
         };
 
         let stdout =
@@ -124,7 +136,8 @@ impl FFMpegDecoder {
             .child
             .wait()
             .map_err(|e| VideoProcError::explain_io("waiting on video process", e))?;
-        self.info_thread
+        _ = self
+            .info_thread
             .join()
             .map_err(|_| VideoProcError::Other("error joining meta data thread".to_string()))?;
         match exit_code.code() {
@@ -141,27 +154,38 @@ impl FFMpegDecoder {
 
     /// Write new image and return its frame id.
     pub fn read_frame(&mut self, image: &mut BgrImage) -> VideoResult<u64> {
-        self.stdout.read_exact(image.as_mut()).map_err(|e| {
-            VideoProcError::explain_io("error reading full frame from video process", e)
-        })?;
+        self.stdout
+            .read_exact(image.as_mut())
+            .map_err(|e| VideoProcError::ExactReadError { source: e })?;
         self.frame_counter += 1;
         Ok(self.frame_counter)
     }
+}
+
+/// StreamInfo or variant to signal EOF
+enum StreamInfoTerm {
+    /// Video IO stream infos
+    Info(StreamInfo),
+    /// Last line read without parsing after which
+    /// no more messages will be sent
+    Final(String),
 }
 
 /// Deliver infos about an ffmpeg video process trhough its stderr file
 ///
 /// The receiver can be read until satisfying info was obtained and dropped anytime.
 /// By default, frame updates and other infos are logged as tracing event.
-/// todo: offer a custom callback
+/// The last line is returned if the thread joins without errors.
+///
+/// todo: offer a custom callback for info messages
 fn spawn_info_thread<R>(
     stderr: R,
-) -> VideoResult<(Receiver<InfoResult<StreamInfo>>, JoinHandle<()>)>
+) -> VideoResult<(Receiver<InfoResult<StreamInfoTerm>>, JoinHandle<String>)>
 where
     R: Read + Send + 'static,
 {
     let (stream_info_tx, stream_info_rx) =
-        std::sync::mpsc::sync_channel::<InfoResult<StreamInfo>>(2);
+        std::sync::mpsc::sync_channel::<InfoResult<StreamInfoTerm>>(2);
 
     let info_thread = thread::Builder::new()
         .name("Video".to_string())
@@ -184,7 +208,7 @@ where
                 match msg {
                     Ok(VideoInfo::Stream(msg)) => {
                         _ = stream_info_tx
-                            .send(Ok(msg.clone()))
+                            .send(Ok(StreamInfoTerm::Info(msg.clone())))
                             .map_err(|e| warn!("could not send stream info: {:?}", e));
                         log_info_handler(Ok(VideoInfo::Stream(msg)));
                     }
@@ -197,8 +221,10 @@ where
                     }
                 };
             }
-            let last_line = String::from_utf8_lossy(ffmpeg_lines.state());
-            info!("finished reading stderr: {}", last_line);
+            let last_line = String::from_utf8_lossy(ffmpeg_lines.state()).to_string();
+            info!("finished reading stderr: {}", &last_line);
+            _ = stream_info_tx.send(Ok(StreamInfoTerm::Final(last_line.clone())));
+            last_line
         })
         .map_err(|e| VideoProcError::explain_io("couldn't spawn info parsing thread", e))?;
     Ok((stream_info_rx, info_thread))
