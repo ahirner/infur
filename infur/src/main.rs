@@ -129,19 +129,20 @@ impl eframe::App for InFur {
                 .step_by(0.01f64)
                 .text("scale")
                 .clamp_to_range(true);
-            ui.add(scale);
+            let scale_response = ui.add(scale);
             let min_conf = Slider::new(&mut self.min_conf, 0f32..=1.0)
                 .step_by(0.01f64)
                 .text("min_conf")
                 .clamp_to_range(true);
             ui.add(min_conf);
-
-            // todo: only send if changed..
-            let _ = self
-                .ctrl_tx
-                .send(ProcCtrl::SetScale(self.scale))
-                .map_err(|e| ui.label(e.to_string()));
             ui.label(frame_status);
+
+            if scale_response.changed {
+                let _ = self
+                    .ctrl_tx
+                    .send(ProcCtrl::SetScale(self.scale))
+                    .map_err(|e| ui.label(e.to_string()));
+            };
         });
 
         ctx.request_repaint();
@@ -228,6 +229,7 @@ fn proc_loop(
     let mut app = ProcessingApp::default();
 
     loop {
+        // todo: get all commands
         let cmd = if !app.is_video() {
             // video is not playing, block
             match cmds.recv() {
