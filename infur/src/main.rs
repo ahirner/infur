@@ -1,8 +1,11 @@
-use std::sync::mpsc::{Receiver, Sender, SyncSender, TryRecvError};
+use std::{
+    collections::VecDeque,
+    sync::mpsc::{Receiver, Sender, SyncSender, TryRecvError},
+};
 
 use eframe::{
-    egui::{CentralPanel, SidePanel, Slider, TextureFilter, TextureHandle},
-    epaint::ColorImage,
+    egui::{self, CentralPanel, RichText, SidePanel, Slider, TextureFilter, TextureHandle},
+    epaint::{ColorImage, FontId},
     NativeOptions,
 };
 use stable_eyre::eyre::{eyre, Report};
@@ -76,28 +79,47 @@ fn init_logs() -> Result<()> {
     Ok(())
 }
 
-struct InFur {
-    ctrl_tx: Sender<ProcCtrl>,
-    frame_rx: Receiver<VideoResult<Frame>>,
-    last_texture: Option<VideoProcResult<TextureFrame>>,
-    min_conf: f32,
-    scale: f32,
-}
-
-impl InFur {
-    fn new(ctrl_tx: Sender<ProcCtrl>, frame_rx: Receiver<ff_video::VideoResult<Frame>>) -> Self {
-        Self { ctrl_tx, frame_rx, last_texture: None, min_conf: 0.5, scale: 0.5 }
-    }
-}
-
 struct TextureFrame {
     id: u64,
     handle: TextureHandle,
 }
 
+struct ProcConfig {
+    min_conf: f32,
+    scale: f32,
+}
+
+struct InFur {
+    ctrl_tx: Sender<ProcCtrl>,
+    frame_rx: Receiver<VideoResult<Frame>>,
+    main_texture: Option<VideoProcResult<TextureFrame>>,
+    config: ProcConfig,
+    video_input: Vec<String>,
+    error_history: VecDeque<String>,
+}
+
+impl InFur {
+    fn new(ctrl_tx: Sender<ProcCtrl>, frame_rx: Receiver<ff_video::VideoResult<Frame>>) -> Self {
+        let config = ProcConfig { min_conf: 0.5, scale: 0.5 };
+        Self {
+            ctrl_tx,
+            frame_rx,
+            main_texture: None,
+            error_history: VecDeque::with_capacity(3),
+            config,
+            video_input: vec![],
+        }
+    }
+
+    fn send(&mut self, cmd: ProcCtrl) {
+        self.error_history.truncate(2);
+        _ = self.ctrl_tx.send(cmd).map_err(|e| self.error_history.push_front(e.to_string()));
+    }
+}
+
 impl eframe::App for InFur {
     fn update(&mut self, ctx: &eframe::egui::Context, _frame: &mut eframe::Frame) {
-        // update text from new frame
+        // update texture from new frame
         if let Ok(frame) = self.frame_rx.try_recv() {
             let result = match frame {
                 Ok(frame) => Ok(TextureFrame {
@@ -106,18 +128,19 @@ impl eframe::App for InFur {
                 }),
                 Err(e) => Err(FFVideoError::Processing(e)),
             };
-            self.last_texture = Some(result);
+            self.main_texture = Some(result);
         }
 
         // show last_texture
-        if let Some(Ok(tex_frame)) = &self.last_texture {
+        // todo: maintain aspect ratio
+        if let Some(Ok(tex_frame)) = &self.main_texture {
             CentralPanel::default().show(ctx, |ui| {
                 ui.image(&tex_frame.handle, ui.available_size());
             });
         };
 
         // stringify last frame's status
-        let frame_status = match &self.last_texture {
+        let frame_status = match &self.main_texture {
             Some(Ok(tex)) => tex.id.to_string(),
             Some(Err(e)) => e.to_string(),
             None => "..waiting".to_string(),
@@ -125,24 +148,43 @@ impl eframe::App for InFur {
 
         SidePanel::left("Options").show(ctx, |ui| {
             ui.spacing_mut().item_spacing.y = 10.0;
-            let scale = Slider::new(&mut self.scale, 0.1f32..=1.0)
+            // video input
+            ui.label(RichText::new("Video").font(FontId::proportional(30.0)));
+            ui.label(frame_status);
+
+            let mut vid_input_changed = false;
+            for inp in self.video_input.iter_mut() {
+                let textbox = ui.text_edit_singleline(inp);
+                vid_input_changed = vid_input_changed || textbox.lost_focus();
+            }
+            if vid_input_changed {
+                dbg!(&self.video_input);
+                self.send(ProcCtrl::Play(self.video_input.clone()));
+            }
+
+            ui.label(RichText::new("Detection").font(FontId::proportional(30.0)));
+            let scale = Slider::new(&mut self.config.scale, 0.1f32..=1.0)
                 .step_by(0.01f64)
                 .text("scale")
                 .clamp_to_range(true);
             let scale_response = ui.add(scale);
-            let min_conf = Slider::new(&mut self.min_conf, 0f32..=1.0)
+            if scale_response.changed {
+                self.send(ProcCtrl::SetScale(self.config.scale));
+            };
+            // todo: actual model
+            let min_conf = Slider::new(&mut self.config.min_conf, 0f32..=1.0)
                 .step_by(0.01f64)
                 .text("min_conf")
                 .clamp_to_range(true);
             ui.add(min_conf);
-            ui.label(frame_status);
 
-            if scale_response.changed {
-                let _ = self
-                    .ctrl_tx
-                    .send(ProcCtrl::SetScale(self.scale))
-                    .map_err(|e| ui.label(e.to_string()));
-            };
+            // quite fatal errors
+            ui.with_layout(egui::Layout::bottom_up(egui::Align::LEFT), |ui| {
+                for (i, err) in self.error_history.iter().cloned().enumerate() {
+                    let col = egui::Color32::RED.linear_multiply(1.0 - (i as f32 / 4.0));
+                    ui.colored_label(col, err);
+                }
+            });
         });
 
         ctx.request_repaint();
@@ -168,7 +210,7 @@ enum ProcCtrl {
 
 /// Manages prcoessing resources and reacts to control messages
 struct ProcessingApp {
-    scale: f32,
+    config: ProcConfig,
     vid: Option<FFMpegDecoder>,
     img: Option<BgrImage>,
     id: u64,
@@ -178,7 +220,9 @@ struct ProcessingApp {
 
 impl Default for ProcessingApp {
     fn default() -> Self {
-        Self { scale: 1.0, vid: None, img: None, id: 0, input: vec![], to_exit: false }
+        // how to acutally handly defaults?
+        let config = ProcConfig { min_conf: 0.5, scale: 0.5 };
+        Self { config, vid: None, img: None, id: 0, input: vec![], to_exit: false }
     }
 }
 
@@ -196,7 +240,7 @@ impl ProcessingApp {
                 self.to_exit = true;
             }
             ProcCtrl::SetScale(s) => {
-                self.scale = s;
+                self.config.scale = s;
             }
         };
         Ok(())
@@ -229,31 +273,34 @@ fn proc_loop(
     let mut app = ProcessingApp::default();
 
     loop {
-        let cmds_proc = loop {
+        // process 0 or many commands
+        loop {
             let cmd = if !app.is_video() {
                 // video is not playing, block
                 match cmds.recv() {
                     Ok(c) => Some(c),
-                    Err(e) => break Some(Err(eyre!(e))),
+                    // unfixable
+                    Err(e) => return Err(eyre!(e)),
                 }
             } else {
                 // video is playing, don't block
                 match cmds.try_recv() {
                     Ok(c) => Some(c),
-                    Err(TryRecvError::Empty) => break None,
-                    Err(e) => break Some(Err(eyre!(e))),
+                    Err(TryRecvError::Empty) => break,
+                    // unfixable
+                    Err(e) => return Err(eyre!(e)),
                 }
             };
             if let Some(cmd) = cmd {
-                app.control(cmd)?
+                if let Err(e) = app.control(cmd) {
+                    frame_tx.send(Err(e))?;
+                }
             };
             if app.to_exit {
                 return Ok(());
             };
-        };
-        if let Some(r) = cmds_proc {
-            break r;
-        };
+        }
+
         let new_frame = match app.next_frame() {
             Ok(new) => new,
             Err(e) => {
@@ -266,8 +313,8 @@ fn proc_loop(
         if new_frame {
             if let Some(ref img) = app.img {
                 let id = app.id;
-                let nwidth = (img.width() as f32 * app.scale) as _;
-                let nheight = (img.height() as f32 * app.scale) as _;
+                let nwidth = (img.width() as f32 * app.config.scale) as _;
+                let nheight = (img.height() as f32 * app.config.scale) as _;
 
                 let img_temp;
                 let img_scaled = if nwidth == img.width() && nheight == img.height() {
@@ -302,10 +349,11 @@ fn main() -> Result<()> {
     let (ctrl_tx, ctrl_rx) = std::sync::mpsc::channel();
 
     let infur_thread = std::thread::spawn(move || proc_loop(ctrl_rx, frame_tx));
-    ctrl_tx.send(ProcCtrl::SetScale(0.5))?;
-    ctrl_tx.send(ProcCtrl::Play(args))?;
+    //ctrl_tx.send(ProcCtrl::SetScale(0.5))?;
+    //ctrl_tx.send(ProcCtrl::Play(args))?;
 
-    let app = InFur::new(ctrl_tx.clone(), frame_rx);
+    let mut app = InFur::new(ctrl_tx.clone(), frame_rx);
+    app.video_input = args;
     let window_opts = NativeOptions::default();
     eframe::run_native("InFur", window_opts, Box::new(|_| Box::new(app)));
 
