@@ -199,6 +199,7 @@ fn proc_loop(
 ) -> Result<()> {
     let mut app = ProcessingApp::default();
     loop {
+        // todo: exit on closed channel?
         loop {
             let cmd = if !app.is_dirty() {
                 // video is not playing, block
@@ -219,7 +220,7 @@ fn proc_loop(
             if let Some(cmd) = cmd {
                 if let Err(e) = app.control(cmd) {
                     // Control Error
-                    frame_tx.try_send(Err(e.into()))?;
+                    let _ = frame_tx.try_send(Err(e.into()));
                 }
             };
             if app.to_exit {
@@ -229,14 +230,15 @@ fn proc_loop(
 
         match app.advance(&(), &mut ()) {
             Ok(Some(frame)) => {
-                frame_tx.try_send(Ok(frame))?;
+                // block for now, but need to think of dropping behavior
+                let _ = frame_tx.send(Ok(frame));
             }
             // todo: handle better
             Ok(None) => {
                 println!("Didn't expect None result because we should have waited for dirty video")
             }
             Err(e) => {
-                frame_tx.try_send(Err(e.into()))?;
+                let _ = frame_tx.try_send(Err(e.into()));
             }
         };
     }
@@ -253,14 +255,14 @@ fn main() -> Result<()> {
     ctrl_tx.send(AppCmd::Video(VideoCmd::Play(args.clone())))?;
 
     let mut app = InFur::new(ctrl_tx.clone(), frame_rx);
+    app.config.scale = 1.0f32;
     app.video_input = args;
     let window_opts = NativeOptions::default();
     eframe::run_native("InFur", window_opts, Box::new(|_| Box::new(app)));
 
-    ctrl_tx.send(AppCmd::Video(VideoCmd::Stop))?;
-    ctrl_tx.send(AppCmd::Exit)?;
-    // todo: something i didn't get from eyre..??
-    infur_thread.join().map_err(|_| eyre!("video processing thread errored"))??;
+    ctrl_tx.send(AppCmd::Video(VideoCmd::Stop)).map_err(|e| eprintln!("{:?}", e)).unwrap();
+    ctrl_tx.send(AppCmd::Exit).map_err(|e| eprintln!("{:?}", e)).unwrap();
+    infur_thread.join().unwrap().unwrap();
 
     Ok(())
 }
