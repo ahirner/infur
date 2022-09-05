@@ -24,27 +24,30 @@ impl PartialEq for Frame {
 }
 
 /// Streaming Iterator whose item processing can be controlled
-pub(crate) trait Processor<ProcessResult = ()> {
+pub(crate) trait Processor {
     /// Type of commands to control the processor
     type Command;
 
     /// Error to expect when controlling the processor
     type ControlError;
 
-    /// The expected input to advance
+    /// Input to advance with
     type Input;
 
     /// Item mutated on advance
     ///
     /// For why we can't impl Iterator see:
     /// <http://lukaskalbertodt.github.io/2018/08/03/solving-the-generalized-streaming-iterator-problem-without-gats.html>
-    type Item;
+    type Output;
+
+    /// Return value for processing input
+    type ProcessResult;
 
     /// Affect processor parameters
     fn control(&mut self, cmd: Self::Command) -> Result<&mut Self, Self::ControlError>;
 
     /// Process and store a new result
-    fn advance(&mut self, inp: &Self::Input, out: &mut Self::Item) -> ProcessResult;
+    fn advance(&mut self, inp: &Self::Input, out: &mut Self::Output) -> Self::ProcessResult;
 
     /// True if passing the same input into advance gives a new results
     fn is_dirty(&self) -> bool;
@@ -71,11 +74,12 @@ impl VideoPlayer {
     }
 }
 
-impl Processor<VideoResult<()>> for VideoPlayer {
+impl Processor for VideoPlayer {
     type Command = VideoCmd;
     type ControlError = FFVideoError;
     type Input = ();
-    type Item = Option<Frame>;
+    type Output = Option<Frame>;
+    type ProcessResult = VideoResult<()>;
 
     fn control(&mut self, cmd: Self::Command) -> Result<&mut Self, Self::ControlError> {
         match cmd {
@@ -96,7 +100,7 @@ impl Processor<VideoResult<()>> for VideoPlayer {
         self.vid.is_some()
     }
 
-    fn advance(&mut self, _inp: &(), out: &mut Self::Item) -> VideoResult<()> {
+    fn advance(&mut self, _inp: &(), out: &mut Self::Output) -> Self::ProcessResult {
         if let Some(vid) = self.vid.as_mut() {
             //todo: what if size changed?
             let frame = out.get_or_insert_with(|| Frame { id: 0, img: vid.empty_image() });
@@ -163,7 +167,8 @@ impl Processor for Scale {
     type Command = f32;
     type ControlError = <ValidScale as TryFrom<f32>>::Error;
     type Input = Frame;
-    type Item = Option<Frame>;
+    type Output = Option<Frame>;
+    type ProcessResult = ();
 
     fn control(&mut self, cmd: Self::Command) -> Result<&mut Self, Self::ControlError> {
         let factor = cmd.try_into()?;
@@ -176,7 +181,7 @@ impl Processor for Scale {
         false
     }
 
-    fn advance(&mut self, frame: &Self::Input, out: &mut Self::Item) {
+    fn advance(&mut self, frame: &Self::Input, out: &mut Self::Output) {
         if self.is_unit_scale() {
             // todo: can we at all avoid a clone?
             *out = Some(Frame { id: frame.id, img: frame.img.clone() });
@@ -227,11 +232,12 @@ pub(crate) struct ProcessingApp {
     pub(crate) to_exit: bool,
 }
 
-impl Processor<Result<Option<GUIFrame>, AppProcError>> for ProcessingApp {
+impl Processor for ProcessingApp {
     type Command = AppCmd;
     type ControlError = AppCmdError;
     type Input = ();
-    type Item = ();
+    type Output = ();
+    type ProcessResult = Result<Option<GUIFrame>, AppProcError>;
 
     fn control(&mut self, cmd: Self::Command) -> Result<&mut Self, Self::ControlError> {
         match cmd {
@@ -246,7 +252,7 @@ impl Processor<Result<Option<GUIFrame>, AppProcError>> for ProcessingApp {
         Ok(self)
     }
 
-    fn advance(&mut self, input: &(), _out: &mut ()) -> Result<Option<GUIFrame>, AppProcError> {
+    fn advance(&mut self, input: &(), _out: &mut ()) -> Self::ProcessResult {
         self.vid.advance(input, &mut self.frame)?;
         if let Some(frame) = &self.frame {
             self.scale.advance(frame, &mut self.scaled_frame);
