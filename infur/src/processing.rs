@@ -278,7 +278,7 @@ impl Processor<VideoResult<Option<GUIFrame>>> for ProcessingApp {
                 .collect::<Vec<_>>();
 
             let col_img = ColorImage {
-                size: [scaled_frame.img.width() as usize, scaled_frame.img.width() as usize],
+                size: [scaled_frame.img.width() as usize, scaled_frame.img.height() as usize],
                 pixels: rgba_pixels,
             };
             Ok(Some(GUIFrame { id: scaled_frame.id, buffer: col_img }))
