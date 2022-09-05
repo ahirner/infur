@@ -12,15 +12,25 @@ use eframe::{
 };
 use ff_video::FFMpegDecoder;
 use image_ext::{imageops::FilterType, BgrImage};
-use processing::{AppCmd, GUIFrame, ProcessingApp, ProcessingError, Processor};
+use processing::{AppCmd, AppCmdError, AppProcError, GUIFrame, ProcessingApp, Processor};
 use stable_eyre::eyre::{eyre, Report};
+use thiserror::Error;
 use tracing::{debug, error, warn};
 use tracing_subscriber::{fmt, EnvFilter};
 
 use crate::processing::VideoCmd;
 
+/// Error processing commands or inputs
+#[derive(Error, Debug)]
+pub(crate) enum AppError {
+    #[error("error processing command")]
+    Command(#[from] AppCmdError),
+    #[error("error processing video feed")]
+    Processing(#[from] AppProcError),
+}
+
 type Result<T> = std::result::Result<T, Report>;
-type ProcessingResult<T> = std::result::Result<T, ProcessingError>;
+type ProcessingResult<T> = std::result::Result<T, AppError>;
 
 #[allow(dead_code)]
 fn infer_onnx(

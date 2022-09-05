@@ -1,9 +1,4 @@
-use std::{
-    error::Error as StdError,
-    fmt::Display,
-    ops::Deref,
-    sync::mpsc::{RecvError, SendError, TryRecvError},
-};
+use std::{error::Error as StdError, fmt::Display, ops::Deref};
 
 use eframe::epaint::ColorImage;
 use ff_video::{FFMpegDecoder, FFMpegDecoderBuilder, FFVideoError, VideoProcError, VideoResult};
@@ -194,26 +189,23 @@ impl Processor for Scale {
     }
 }
 
-/// Processing Error
+/// Application processing error
 #[derive(Error, Debug)]
-pub(crate) enum ProcError {
+pub(crate) enum AppProcError {
+    #[error(transparent)]
+    Video(#[from] VideoProcError),
+}
+
+/// Application command processing error
+#[derive(Error, Debug)]
+pub(crate) enum AppCmdError {
+    #[error(transparent)]
+    Scale(#[from] ValidScaleError),
     #[error(transparent)]
     Video(#[from] FFVideoError),
-    #[error("channel communication failed")]
-    Communication(#[from] CommunicationError),
 }
 
-#[derive(Error, Debug)]
-pub(crate) enum CommunicationError {
-    #[error(transparent)]
-    Recv(#[from] RecvError),
-    #[error(transparent)]
-    TryRecv(#[from] TryRecvError),
-    #[error(transparent)]
-    Send(#[from] SendError<VideoResult<GUIFrame>>),
-}
-
-/// Commands transmitted to processing backend
+/// Control entire application
 #[derive(Clone, Debug)]
 pub(crate) enum AppCmd {
     /// Control video input
@@ -235,19 +227,11 @@ pub(crate) struct ProcessingApp {
     pub(crate) to_exit: bool,
 }
 
-#[derive(Error, Debug)]
-pub(crate) enum AppCmdError {
-    #[error(transparent)]
-    Scale(#[from] ValidScaleError),
-    #[error(transparent)]
-    Video(#[from] FFVideoError),
-}
-
-impl Processor<VideoResult<Option<GUIFrame>>> for ProcessingApp {
+impl Processor<Result<Option<GUIFrame>, AppProcError>> for ProcessingApp {
     type Command = AppCmd;
     type ControlError = AppCmdError;
     type Input = ();
-    type Item = (); //Result<GUIFrame, Box<dyn StdError>>;
+    type Item = ();
 
     fn control(&mut self, cmd: Self::Command) -> Result<&mut Self, Self::ControlError> {
         match cmd {
@@ -262,7 +246,7 @@ impl Processor<VideoResult<Option<GUIFrame>>> for ProcessingApp {
         Ok(self)
     }
 
-    fn advance(&mut self, input: &(), _out: &mut ()) -> VideoResult<Option<GUIFrame>> {
+    fn advance(&mut self, input: &(), _out: &mut ()) -> Result<Option<GUIFrame>, AppProcError> {
         self.vid.advance(input, &mut self.frame)?;
         if let Some(frame) = &self.frame {
             self.scale.advance(frame, &mut self.scaled_frame);
@@ -291,13 +275,6 @@ impl Processor<VideoResult<Option<GUIFrame>>> for ProcessingApp {
     fn is_dirty(&self) -> bool {
         self.vid.is_dirty() || self.scale.is_dirty()
     }
-}
-#[derive(Error, Debug)]
-pub(crate) enum ProcessingError {
-    #[error("error processing command")]
-    Command(#[from] AppCmdError),
-    #[error("error processing video feed")]
-    Video(#[from] VideoProcError),
 }
 
 #[cfg(test)]
