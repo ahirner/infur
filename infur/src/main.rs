@@ -10,11 +10,12 @@ use eframe::{
     epaint::FontId,
     NativeOptions,
 };
-use processing::{AppCmd, GUIFrame, ProcessingApp, ProcessingError, Processor};
-use stable_eyre::eyre::{eyre, Report};
-
 use ff_video::FFMpegDecoder;
 use image_ext::{imageops::FilterType, BgrImage};
+use processing::{AppCmd, GUIFrame, ProcessingApp, ProcessingError, Processor};
+use stable_eyre::eyre::{eyre, Report};
+use tracing::{debug, error, warn};
+use tracing_subscriber::{fmt, EnvFilter};
 
 use crate::processing::VideoCmd;
 
@@ -78,9 +79,9 @@ fn infer_onnx(
 
 fn init_logs() -> Result<()> {
     stable_eyre::install()?;
-    let format =
-        tracing_subscriber::fmt::format().with_thread_names(true).with_target(false).compact();
-    tracing_subscriber::fmt().event_format(format).init();
+    let format = fmt::format().with_thread_names(true).with_target(false).compact();
+    let filter = EnvFilter::try_from_default_env().or_else(|_| EnvFilter::try_new("info")).unwrap();
+    tracing_subscriber::fmt::fmt().with_env_filter(filter).event_format(format).init();
     Ok(())
 }
 
@@ -94,6 +95,12 @@ struct ProcConfig {
     scale: f32,
 }
 
+impl Default for ProcConfig {
+    fn default() -> Self {
+        Self { min_conf: 0.5, scale: 0.5 }
+    }
+}
+
 struct InFur {
     ctrl_tx: Sender<AppCmd>,
     frame_rx: Receiver<ProcessingResult<GUIFrame>>,
@@ -105,7 +112,7 @@ struct InFur {
 
 impl InFur {
     fn new(ctrl_tx: Sender<AppCmd>, frame_rx: Receiver<ProcessingResult<GUIFrame>>) -> Self {
-        let config = ProcConfig { min_conf: 0.5, scale: 0.5 };
+        let config = ProcConfig::default();
         Self {
             ctrl_tx,
             frame_rx,
@@ -218,6 +225,7 @@ fn proc_loop(
                 }
             };
             if let Some(cmd) = cmd {
+                debug!("relaying command: {:?}", cmd);
                 if let Err(e) = app.control(cmd) {
                     // Control Error
                     let _ = frame_tx.try_send(Err(e.into()));
@@ -235,7 +243,7 @@ fn proc_loop(
             }
             // todo: handle better
             Ok(None) => {
-                println!("Didn't expect None result because we should have waited for dirty video")
+                warn!("Didn't expect None result because we should have waited for dirty video")
             }
             Err(e) => {
                 let _ = frame_tx.try_send(Err(e.into()));
@@ -247,21 +255,31 @@ fn proc_loop(
 fn main() -> Result<()> {
     init_logs()?;
     let args = std::env::args().skip(1).collect::<Vec<_>>();
+
     let (frame_tx, frame_rx) = std::sync::mpsc::sync_channel(2);
     let (ctrl_tx, ctrl_rx) = std::sync::mpsc::channel();
-
-    let infur_thread = std::thread::spawn(move || proc_loop(ctrl_rx, frame_tx));
-    //ctrl_tx.send(AppCmd::Scale(0.5))?;
-    ctrl_tx.send(AppCmd::Video(VideoCmd::Play(args.clone())))?;
-
     let mut app = InFur::new(ctrl_tx.clone(), frame_rx);
-    app.config.scale = 1.0f32;
-    app.video_input = args;
-    let window_opts = NativeOptions::default();
+
+    debug!("spawning Proc thread");
+    let infur_thread = std::thread::Builder::new()
+        .name("Proc".to_string())
+        .spawn(move || proc_loop(ctrl_rx, frame_tx))?;
+    // send defaults and config from args
+    {
+        let config = ProcConfig::default();
+        ctrl_tx.send(AppCmd::Scale(config.scale))?;
+        // set video from args
+        ctrl_tx.send(AppCmd::Video(VideoCmd::Play(args.clone())))?;
+        app.video_input = args;
+    }
+
+    let window_opts = NativeOptions { vsync: false, ..Default::default() };
+    debug!("starting InFur frontend");
     eframe::run_native("InFur", window_opts, Box::new(|_| Box::new(app)));
 
-    ctrl_tx.send(AppCmd::Video(VideoCmd::Stop)).map_err(|e| eprintln!("{:?}", e)).unwrap();
-    ctrl_tx.send(AppCmd::Exit).map_err(|e| eprintln!("{:?}", e)).unwrap();
+    // exit verbose on error
+    ctrl_tx.send(AppCmd::Video(VideoCmd::Stop)).map_err(|e| error!("{:?}", e)).unwrap();
+    ctrl_tx.send(AppCmd::Exit).map_err(|e| error!("{:?}", e)).unwrap();
     infur_thread.join().unwrap().unwrap();
 
     Ok(())
