@@ -183,7 +183,8 @@ impl Processor for Scale {
 
     fn advance(&mut self, frame: &Self::Input, out: &mut Self::Item) {
         if self.is_unit_scale() {
-            let _ = out.as_ref().insert(frame);
+            // todo: can we at all avoid a clone?
+            *out = Some(Frame { id: frame.id, img: frame.img.clone() });
             return;
         }
         let nwidth = (frame.img.width() as f32 * self.factor.0) as _;
