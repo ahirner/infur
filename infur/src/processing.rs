@@ -299,58 +299,6 @@ pub(crate) enum ProcessingError {
     Video(#[from] VideoProcError),
 }
 
-// todo: design and blanket impl proper messaging procedures
-/*
-pub(crate) struct CtrlIter<'a, 'b, 'c, T> {
-    app: &'a mut ProcessingApp<'a, 'b>,
-    rx: &'c mut Receiver<T>,
-}
-
-impl<'a, 'b, 'c> Iterator for CtrlIter<'a, 'b, 'c, AppCmd> {
-    type Item = Result<(), AppCmdError>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        loop {
-            // todo: if dirty in general?
-            let cmd = if !self.app.vid.is_dirty() {
-                // video is not playing, block
-                match self.rx.recv() {
-                    Ok(c) => Some(c),
-                    // unfixable (hung-up)
-                    Err(_) => break None,
-                }
-            } else {
-                // video is playing, don't block
-                match self.rx.try_recv() {
-                    Ok(c) => Some(c),
-                    Err(TryRecvError::Empty) => None,
-                    // unfixable (hung-up)
-                    Err(_) => break None,
-                }
-            };
-            if let Some(cmd) = cmd {
-                if let Err(e) = self.app.control(cmd) {
-                    // Control Error
-                    break Some(Err(e));
-                }
-            };
-            if self.app.to_exit {
-                return None;
-            };
-        }
-    }
-}
-
-impl<'a, 'b, 'c: 'a> ProcessingApp<'a, 'b> {
-    pub(crate) fn control_on(
-        &'a mut self,
-        cmds: &'c mut Receiver<AppCmd>,
-    ) -> CtrlIter<'a, 'b, 'c, AppCmd> {
-        CtrlIter { app: self, rx: cmds }
-    }
-}
-*/
-
 #[cfg(test)]
 mod test {
     use super::*;
