@@ -311,6 +311,16 @@ mod test {
     }
 
     #[test]
+    fn scale() {
+        let mut app = ProcessingApp::default();
+        // todo: own fixtures
+        app.control(AppCmd::Video(VideoCmd::Play(vec!["http://commondatastorage.googleapis.com/gtv-videos-bucket/sample/WeAreGoingOnBullrun.mp4".to_string()]))).unwrap();
+        app.control(AppCmd::Scale(0.5)).unwrap();
+        let f2 = app.advance(&(), &mut ()).unwrap().expect("video should already play");
+        assert_eq!(f2.buffer.size, [1280 / 2, 720 / 2]);
+    }
+
+    #[test]
     fn switch_scale() {
         let mut app = ProcessingApp::default();
         // todo: own fixtures
