@@ -246,7 +246,7 @@ fn proc_loop(
             };
         }
 
-        match app.advance(&(), &mut ()) {
+        match app.generate() {
             Ok(Some(frame)) => {
                 // block for now, but need to think of dropping behavior
                 let _ = frame_tx.send(Ok(frame));

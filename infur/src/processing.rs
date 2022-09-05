@@ -23,7 +23,9 @@ impl PartialEq for Frame {
     }
 }
 
-/// Streaming Iterator whose item processing can be controlled
+/// Transform expensive to clone data
+///
+/// Other parameters affecting output and results are controlled by a single message type.
 pub(crate) trait Processor {
     /// Type of commands to control the processor
     type Command;
@@ -40,7 +42,7 @@ pub(crate) trait Processor {
     /// <http://lukaskalbertodt.github.io/2018/08/03/solving-the-generalized-streaming-iterator-problem-without-gats.html>
     type Output;
 
-    /// Return value for processing input
+    /// Return value of processing input
     type ProcessResult;
 
     /// Affect processor parameters
@@ -49,8 +51,17 @@ pub(crate) trait Processor {
     /// Process and store a new result
     fn advance(&mut self, inp: &Self::Input, out: &mut Self::Output) -> Self::ProcessResult;
 
-    /// True if passing the same input into advance gives a new results
+    /// True if passing the same input into advance writes new results
     fn is_dirty(&self) -> bool;
+
+    /// Generate results for default input/output (usually final processing nodes)
+    fn generate(&mut self) -> <Self as Processor>::ProcessResult
+    where
+        Self::Input: Default,
+        Self::Output: Default,
+    {
+        self.advance(&Self::Input::default(), &mut Self::Output::default())
+    }
 }
 
 /// Commands that control VideoPlayer
@@ -62,6 +73,7 @@ pub(crate) enum VideoCmd {
     Stop,
 }
 
+/// Writes video frames at command
 #[derive(Default)]
 struct VideoPlayer {
     vid: Option<FFMpegDecoder>,
@@ -147,6 +159,7 @@ impl Deref for ValidScale {
     }
 }
 
+/// Scale frames by a constant factor
 struct Scale {
     factor: ValidScale,
 }
@@ -290,8 +303,8 @@ mod test {
     #[test]
     fn void() {
         let mut app = ProcessingApp::default();
-        assert!(app.advance(&(), &mut ()).unwrap().is_none());
-        assert!(app.advance(&(), &mut ()).unwrap().is_none());
+        assert!(app.generate().unwrap().is_none());
+        assert!(app.generate().unwrap().is_none());
     }
 
     #[test]
@@ -300,7 +313,7 @@ mod test {
         // todo: own fixtures
         app.control(AppCmd::Video(VideoCmd::Play(vec!["http://commondatastorage.googleapis.com/gtv-videos-bucket/sample/WeAreGoingOnBullrun.mp4".to_string()]))).unwrap();
         app.control(AppCmd::Scale(0.5)).unwrap();
-        let f2 = app.advance(&(), &mut ()).unwrap().expect("video should already play");
+        let f2 = app.generate().unwrap().expect("video should already play");
         assert_eq!(f2.buffer.size, [1280 / 2, 720 / 2]);
     }
 
@@ -310,11 +323,11 @@ mod test {
         // todo: own fixtures
         app.control(AppCmd::Video(VideoCmd::Play(vec!["http://commondatastorage.googleapis.com/gtv-videos-bucket/sample/WeAreGoingOnBullrun.mp4".to_string()]))).unwrap();
 
-        let f1 = app.advance(&(), &mut ()).unwrap().expect("video should already play");
+        let f1 = app.generate().unwrap().expect("video should already play");
         assert_eq!(f1.buffer.size, [1280, 720]);
 
         app.control(AppCmd::Scale(0.5)).unwrap();
-        let f2 = app.advance(&(), &mut ()).unwrap().expect("video should keep playing");
+        let f2 = app.generate().unwrap().expect("video should keep playing");
         assert_eq!(f2.buffer.size, [1280 / 2, 720 / 2]);
     }
 }
