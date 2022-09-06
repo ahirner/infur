@@ -114,8 +114,17 @@ impl Processor for VideoPlayer {
 
     fn advance(&mut self, _inp: &(), out: &mut Self::Output) -> Self::ProcessResult {
         if let Some(vid) = self.vid.as_mut() {
-            //todo: what if size changed?
-            let frame = out.get_or_insert_with(|| Frame { id: 0, img: vid.empty_image() });
+            // either reuse, re-create (on size change) or create a frame with suitable buffer
+            let frame = if let Some(ref mut frame) = out {
+                if frame.img.width() != vid.video_output.width
+                    || frame.img.height() != vid.video_output.height
+                {
+                    frame.img = vid.empty_image();
+                }
+                frame
+            } else {
+                out.get_or_insert_with(|| Frame { id: 0, img: vid.empty_image() })
+            };
             let id = vid.read_frame(&mut frame.img)?;
             frame.id = id;
         };
