@@ -154,9 +154,12 @@ impl FFMpegDecoder {
 
     /// Write new image and return its frame id.
     pub fn read_frame(&mut self, image: &mut BgrImage) -> VideoResult<u64> {
-        self.stdout
-            .read_exact(image.as_mut())
-            .map_err(|e| VideoProcError::ExactReadError { source: e })?;
+        self.stdout.read_exact(image.as_mut()).map_err(|e| match self.child.try_wait() {
+            Ok(Some(status)) if status.code() == Some(0) => {
+                VideoProcError::FinishedNormally { source: e }
+            }
+            _ => VideoProcError::ExactReadError { source: e },
+        })?;
         self.frame_counter += 1;
         Ok(self.frame_counter)
     }

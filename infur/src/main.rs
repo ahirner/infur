@@ -23,9 +23,9 @@ use crate::processing::VideoCmd;
 /// Error processing commands or inputs
 #[derive(Error, Debug)]
 pub(crate) enum AppError {
-    #[error("error processing command")]
+    #[error("processing command: {0}")]
     Command(#[from] AppCmdError),
-    #[error("error processing video feed")]
+    #[error("processing video feed: {0}")]
     Processing(#[from] AppProcError),
 }
 
@@ -177,7 +177,6 @@ impl eframe::App for InFur {
                 vid_input_changed = vid_input_changed || textbox.lost_focus();
             }
             if vid_input_changed {
-                dbg!(&self.video_input);
                 self.send(AppCmd::Video(VideoCmd::Play(self.video_input.clone())));
             }
 
@@ -220,6 +219,7 @@ fn proc_loop(
         loop {
             let cmd = if !app.is_dirty() {
                 // video is not playing, block
+                debug!("blocking on new command");
                 match ctrl_rx.recv() {
                     Ok(c) => Some(c),
                     // unfixable (hung-up)
@@ -255,8 +255,9 @@ fn proc_loop(
             Ok(None) => {
                 warn!("Didn't expect None result because we should have waited for dirty video")
             }
+
             Err(e) => {
-                let _ = frame_tx.try_send(Err(e.into()));
+                let _ = frame_tx.send(Err(e.into()));
             }
         };
     }

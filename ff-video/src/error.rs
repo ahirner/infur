@@ -14,6 +14,11 @@ pub enum VideoProcError {
         #[source]
         source: std::io::Error,
     },
+    #[error("finished normally")]
+    FinishedNormally {
+        #[source]
+        source: std::io::Error,
+    },
     #[error("couldn't read an entire image")]
     ExactReadError {
         #[source]

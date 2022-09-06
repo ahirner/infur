@@ -125,8 +125,11 @@ impl Processor for VideoPlayer {
             } else {
                 out.get_or_insert_with(|| Frame { id: 0, img: vid.empty_image() })
             };
-            let id = vid.read_frame(&mut frame.img)?;
-            frame.id = id;
+            let id = vid.read_frame(&mut frame.img);
+            if let Err(VideoProcError::FinishedNormally { .. }) = id {
+                self.close_video()?;
+            }
+            frame.id = id?;
         };
         Ok(())
     }
