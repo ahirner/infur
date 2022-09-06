@@ -112,8 +112,6 @@ struct FrameCounter {
 
 /// Counts how many frames were received and shown over one time strip
 impl FrameCounter {
-    // increment internal show counter (call once per shown frame)
-
     // set start of new time strip (call per measurement)
     fn set_on(&mut self, now: Instant, shown_id: u64, recvd_id: Option<u64>) {
         // deltas
@@ -213,7 +211,8 @@ impl InFur {
 impl eframe::App for InFur {
     fn update(&mut self, ctx: &eframe::egui::Context, _frame: &mut eframe::Frame) {
         // update texture from new frame
-        if let Ok(frame) = self.frame_rx.try_recv() {
+        // this limits UI updates if no frames are sent to ca. 30fps
+        if let Ok(frame) = self.frame_rx.recv_timeout(Duration::from_millis(30)) {
             let result = frame.map(|frame| TextureFrame {
                 id: frame.id,
                 handle: ctx.load_texture("frame", frame.buffer, TextureFilter::Linear),
@@ -280,7 +279,6 @@ impl eframe::App for InFur {
                 self.counter.recvd_fps(),
                 self.counter.dropped_since()
             );
-            //let frame_stats = format!("drops/skips: {}", self.counter.dropped_since());
             ui.label(frame_stats);
 
             // quite fatal errors
@@ -379,7 +377,7 @@ fn main() -> Result<()> {
         app.video_input = args;
     }
 
-    let window_opts = NativeOptions { vsync: false, ..Default::default() };
+    let window_opts = NativeOptions { vsync: true, ..Default::default() };
     debug!("starting InFur frontend");
     eframe::run_native("InFur", window_opts, Box::new(|_| Box::new(app)));
 
