@@ -17,3 +17,6 @@ eframe = { version = "0.19", features = ["wgpu"] }
 onnxruntime = { git = "https://github.com/nbigaouette/onnxruntime-rs" }
 image-ext = { path = "../image-ext" }
 ff-video = { path = "../ff-video" }
+
+[dev-dependencies]
+infur-test-gen = { "path" = "../infur-test-gen" }

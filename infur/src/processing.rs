@@ -299,6 +299,16 @@ impl Processor for ProcessingApp {
 #[cfg(test)]
 mod test {
     use super::*;
+    use infur_test_gen::{long_small_video, short_large_video};
+
+    /// 640x480
+    fn short_large_input() -> Vec<String> {
+        vec![short_large_video().to_string_lossy().to_string()]
+    }
+    /// 1280x720
+    fn long_small_input() -> Vec<String> {
+        vec![long_small_video().to_string_lossy().to_string()]
+    }
 
     #[test]
     fn void() {
@@ -310,8 +320,7 @@ mod test {
     #[test]
     fn scale() {
         let mut app = ProcessingApp::default();
-        // todo: own fixtures
-        app.control(AppCmd::Video(VideoCmd::Play(vec!["http://commondatastorage.googleapis.com/gtv-videos-bucket/sample/WeAreGoingOnBullrun.mp4".to_string()]))).unwrap();
+        app.control(AppCmd::Video(VideoCmd::Play(short_large_input()))).unwrap();
         app.control(AppCmd::Scale(0.5)).unwrap();
         let f2 = app.generate().unwrap().expect("video should already play");
         assert_eq!(f2.buffer.size, [1280 / 2, 720 / 2]);
@@ -320,14 +329,12 @@ mod test {
     #[test]
     fn switch_scale() {
         let mut app = ProcessingApp::default();
-        // todo: own fixtures
-        app.control(AppCmd::Video(VideoCmd::Play(vec!["http://commondatastorage.googleapis.com/gtv-videos-bucket/sample/WeAreGoingOnBullrun.mp4".to_string()]))).unwrap();
-
+        app.control(AppCmd::Video(VideoCmd::Play(long_small_input()))).unwrap();
         let f1 = app.generate().unwrap().expect("video should already play");
-        assert_eq!(f1.buffer.size, [1280, 720]);
+        assert_eq!(f1.buffer.size, [640, 480]);
 
         app.control(AppCmd::Scale(0.5)).unwrap();
         let f2 = app.generate().unwrap().expect("video should keep playing");
-        assert_eq!(f2.buffer.size, [1280 / 2, 720 / 2]);
+        assert_eq!(f2.buffer.size, [640 / 2, 480 / 2]);
     }
 }
