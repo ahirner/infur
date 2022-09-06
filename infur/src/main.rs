@@ -305,8 +305,8 @@ impl eframe::App for InFur {
 fn proc_loop(
     ctrl_rx: Receiver<AppCmd>,
     frame_tx: SyncSender<ProcessingResult<GUIFrame>>,
+    mut app: ProcessingApp,
 ) -> Result<()> {
-    let mut app = ProcessingApp::default();
     loop {
         // todo: exit on closed channel?
         loop {
@@ -331,7 +331,7 @@ fn proc_loop(
                 debug!("relaying command: {:?}", cmd);
                 if let Err(e) = app.control(cmd) {
                     // Control Error
-                    let _ = frame_tx.try_send(Err(e.into()));
+                    let _ = frame_tx.send(Err(e.into()));
                 }
             };
             if app.to_exit {
@@ -362,24 +362,26 @@ fn main() -> Result<()> {
 
     let (frame_tx, frame_rx) = std::sync::mpsc::sync_channel(2);
     let (ctrl_tx, ctrl_rx) = std::sync::mpsc::channel();
-    let mut app = InFur::new(ctrl_tx.clone(), frame_rx);
+
+    let mut app_gui = InFur::new(ctrl_tx.clone(), frame_rx);
+    let app_proc = ProcessingApp::default();
 
     debug!("spawning Proc thread");
     let infur_thread = std::thread::Builder::new()
         .name("Proc".to_string())
-        .spawn(move || proc_loop(ctrl_rx, frame_tx))?;
+        .spawn(move || proc_loop(ctrl_rx, frame_tx, app_proc))?;
     // send defaults and config from args
     {
         let config = ProcConfig::default();
         ctrl_tx.send(AppCmd::Scale(config.scale))?;
         // set video from args
         ctrl_tx.send(AppCmd::Video(VideoCmd::Play(args.clone())))?;
-        app.video_input = args;
+        app_gui.video_input = args;
     }
 
     let window_opts = NativeOptions { vsync: true, ..Default::default() };
-    debug!("starting InFur frontend");
-    eframe::run_native("InFur", window_opts, Box::new(|_| Box::new(app)));
+    debug!("starting InFur GUI");
+    eframe::run_native("InFur", window_opts, Box::new(|_| Box::new(app_gui)));
 
     // exit verbose on error
     ctrl_tx.send(AppCmd::Video(VideoCmd::Stop)).map_err(|e| error!("{:?}", e)).unwrap();
