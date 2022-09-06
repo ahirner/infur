@@ -1,5 +1,5 @@
 [workspace]
-members = ["infur", "ff-video", "image-ext"]
+members = ["infur", "infur-test-gen", "ff-video", "image-ext"]
 resolver = "2"
 
 [profile.dev.package]
