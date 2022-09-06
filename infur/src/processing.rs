@@ -1,8 +1,9 @@
-use std::{error::Error as StdError, fmt::Display, ops::Deref};
+use std::{error::Error as StdError, fmt::Display, num::NonZeroU32, ops::Deref};
 
 use eframe::epaint::ColorImage;
+use fast_image_resize as fr;
 use ff_video::{FFMpegDecoder, FFMpegDecoderBuilder, FFVideoError, VideoProcError, VideoResult};
-use image_ext::{imageops::FilterType, BgrImage, Pixel};
+use image_ext::{BgrImage, Pixel};
 use thiserror::Error;
 
 /// Frame transmitted to GUI
@@ -174,11 +175,12 @@ impl Deref for ValidScale {
 /// Scale frames by a constant factor
 struct Scale {
     factor: ValidScale,
+    resizer: fr::Resizer,
 }
 
 impl Default for Scale {
     fn default() -> Self {
-        Self { factor: ValidScale(1.0f32) }
+        Self { factor: ValidScale(1.0f32), resizer: fr::Resizer::new(fr::ResizeAlg::Nearest) }
     }
 }
 
@@ -187,17 +189,28 @@ impl Scale {
         self.factor.0 == 1.0f32
     }
 }
+/// Error processing scale
+#[derive(Error, Debug)]
+pub(crate) enum ScaleProcError {
+    #[error("scaling to 0-sized output")]
+    ZeroSize,
+    #[error(transparent)]
+    PixelType(#[from] fr::DifferentTypesOfPixelsError),
+    #[error(transparent)]
+    BufferError(#[from] fr::ImageBufferError),
+}
 
 impl Processor for Scale {
     type Command = f32;
     type ControlError = <ValidScale as TryFrom<f32>>::Error;
     type Input = Frame;
     type Output = Option<Frame>;
-    type ProcessResult = ();
+    type ProcessResult = Result<(), ScaleProcError>;
 
     fn control(&mut self, cmd: Self::Command) -> Result<&mut Self, Self::ControlError> {
         let factor = cmd.try_into()?;
         self.factor = factor;
+        // todo: change resizer to bilinear for some factors?
         Ok(self)
     }
 
@@ -206,16 +219,47 @@ impl Processor for Scale {
         false
     }
 
-    fn advance(&mut self, frame: &Self::Input, out: &mut Self::Output) {
+    fn advance(&mut self, input: &Self::Input, out: &mut Self::Output) -> Self::ProcessResult {
         if self.is_unit_scale() {
             // todo: can we at all avoid a clone?
-            *out = Some(Frame { id: frame.id, img: frame.img.clone() });
-            return;
+            *out = Some(Frame { id: input.id, img: input.img.clone() });
+            return Ok(());
         }
-        let nwidth = (frame.img.width() as f32 * self.factor.0) as _;
-        let nheight = (frame.img.height() as f32 * self.factor.0) as _;
-        let img = image_ext::imageops::resize(&frame.img, nwidth, nheight, FilterType::Nearest);
-        *out = Some(Frame { id: frame.id, img });
+
+        let nwidth = (input.img.width() as f32 * self.factor.0) as _;
+        let nheight = (input.img.height() as f32 * self.factor.0) as _;
+
+        // todo some conversion trait
+        // get input view
+        let img_view = fr::ImageView::from_buffer(
+            NonZeroU32::new(input.img.width()).unwrap(),
+            NonZeroU32::new(input.img.height()).unwrap(),
+            input.img.as_raw(),
+            fr::PixelType::U8x3,
+        )?;
+
+        // todo some conversion trait
+        // get or create new frame
+        let frame = if let Some(ref mut frame) = out {
+            if frame.img.width() != nwidth || frame.img.height() != nheight {
+                frame.img = BgrImage::new(nwidth, nheight);
+            }
+            frame.id = input.id;
+            frame
+        } else {
+            out.get_or_insert_with(|| Frame { id: input.id, img: BgrImage::new(nwidth, nheight) })
+        };
+
+        // get output view
+        let mut img_view_mut = fr::ImageViewMut::from_buffer(
+            NonZeroU32::new(nwidth).ok_or(ScaleProcError::ZeroSize)?,
+            NonZeroU32::new(nheight).ok_or(ScaleProcError::ZeroSize)?,
+            frame.img.as_mut(),
+            fr::PixelType::U8x3,
+        )?;
+
+        self.resizer.resize(&img_view, &mut img_view_mut)?;
+        Ok(())
     }
 }
 
@@ -224,6 +268,8 @@ impl Processor for Scale {
 pub(crate) enum AppProcError {
     #[error(transparent)]
     Video(#[from] VideoProcError),
+    #[error(transparent)]
+    Scale(#[from] ScaleProcError),
 }
 
 /// Application command processing error
@@ -280,7 +326,7 @@ impl Processor for ProcessingApp {
     fn advance(&mut self, input: &(), _out: &mut ()) -> Self::ProcessResult {
         self.vid.advance(input, &mut self.frame)?;
         if let Some(frame) = &self.frame {
-            self.scale.advance(frame, &mut self.scaled_frame);
+            self.scale.advance(frame, &mut self.scaled_frame)?;
         }
         // todo: trait and/or processor
         if let Some(scaled_frame) = &self.scaled_frame {

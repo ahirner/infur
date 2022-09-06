@@ -12,6 +12,7 @@ stable-eyre = "0.2"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["ansi", "env-filter", "fmt"], default-features = false }
 eframe = { version = "0.19", features = ["wgpu"] }
+fast_image_resize = { version = "1" }
 # need onnxruntime .14 for 0-dim input tolerance (not in .13),
 # then furhtermore need master to resolve ndarray with tract-core...
 onnxruntime = { git = "https://github.com/nbigaouette/onnxruntime-rs" }
