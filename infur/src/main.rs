@@ -3,6 +3,7 @@ mod processing;
 use std::{
     collections::VecDeque,
     sync::mpsc::{Receiver, Sender, SyncSender, TryRecvError},
+    time::{Duration, Instant},
 };
 
 use eframe::{
@@ -100,6 +101,72 @@ struct TextureFrame {
     handle: TextureHandle,
 }
 
+struct FrameCounter {
+    recvd_id: Option<u64>,
+    shown_id: u64,
+    since: Instant,
+    elapsed_since: Duration,
+    shown_since: u64,
+    recvd_since: Option<u64>,
+}
+
+/// Counts how many frames were received and shown over one time strip
+impl FrameCounter {
+    // increment internal show counter (call once per shown frame)
+
+    // set start of new time strip (call per measurement)
+    fn set_on(&mut self, now: Instant, shown_id: u64, recvd_id: Option<u64>) {
+        // deltas
+        self.shown_since = shown_id - self.shown_id;
+        self.recvd_since = match (self.recvd_id, recvd_id) {
+            (None, _) => None,
+            (_, None) => None,
+            (Some(r0), Some(r1)) => Some(r1 - r0),
+        };
+        self.elapsed_since = self.elapsed(now);
+        // new 0
+        self.recvd_id = recvd_id;
+        self.shown_id = shown_id;
+        self.since = now;
+    }
+
+    // time elapsed since last setting
+    fn elapsed(&self, now: Instant) -> Duration {
+        now - self.since
+    }
+
+    // fps of shown frames with respect to last time
+    fn shown_fps(&self) -> f64 {
+        self.shown_since as f64 / self.elapsed_since.as_secs_f64()
+    }
+
+    // fps of received frames with respect to last time
+    fn recvd_fps(&self) -> f64 {
+        match self.recvd_since {
+            Some(r) => r as f64 / self.elapsed_since.as_secs_f64(),
+            None => f64::NAN,
+        }
+    }
+
+    // frames dropped (not shown) or skipped (also not shown)
+    fn dropped_since(&self) -> i64 {
+        self.recvd_since.unwrap_or_default() as i64 - self.shown_since as i64
+    }
+}
+
+impl Default for FrameCounter {
+    fn default() -> Self {
+        Self {
+            recvd_id: None,
+            shown_id: 0,
+            since: Instant::now(),
+            elapsed_since: Duration::ZERO,
+            shown_since: 0,
+            recvd_since: None,
+        }
+    }
+}
+
 struct ProcConfig {
     min_conf: f32,
     scale: f32,
@@ -118,6 +185,8 @@ struct InFur {
     config: ProcConfig,
     video_input: Vec<String>,
     error_history: VecDeque<String>,
+    counter: FrameCounter,
+    show_count: u64,
 }
 
 impl InFur {
@@ -130,6 +199,8 @@ impl InFur {
             error_history: VecDeque::with_capacity(3),
             config,
             video_input: vec![],
+            counter: FrameCounter::default(),
+            show_count: 0,
         }
     }
 
@@ -150,13 +221,19 @@ impl eframe::App for InFur {
             self.main_texture = Some(result);
         }
 
-        // show last_texture
-        // todo: maintain aspect ratio
-        if let Some(Ok(tex_frame)) = &self.main_texture {
-            CentralPanel::default().show(ctx, |ui| {
-                ui.image(&tex_frame.handle, ui.available_size());
-            });
-        };
+        // advance and reset counters
+        self.show_count += 1;
+        let now = std::time::Instant::now();
+        if self.counter.elapsed(now) > Duration::from_secs(1) {
+            self.counter.set_on(
+                now,
+                self.show_count,
+                match &self.main_texture {
+                    Some(Ok(t)) => Some(t.id),
+                    _ => None,
+                },
+            );
+        }
 
         // stringify last frame's status
         let frame_status = match &self.main_texture {
@@ -196,6 +273,16 @@ impl eframe::App for InFur {
                 .clamp_to_range(true);
             ui.add(min_conf);
 
+            // frame stats
+            let frame_stats = format!(
+                "fps UI: {:>3.1}  processed: {:>3.1}  drops/skips: {}",
+                self.counter.shown_fps(),
+                self.counter.recvd_fps(),
+                self.counter.dropped_since()
+            );
+            //let frame_stats = format!("drops/skips: {}", self.counter.dropped_since());
+            ui.label(frame_stats);
+
             // quite fatal errors
             ui.with_layout(egui::Layout::bottom_up(egui::Align::LEFT), |ui| {
                 for (i, err) in self.error_history.iter().cloned().enumerate() {
@@ -204,6 +291,14 @@ impl eframe::App for InFur {
                 }
             });
         });
+
+        // show last_texture
+        // todo: maintain aspect ratio
+        if let Some(Ok(tex_frame)) = &self.main_texture {
+            CentralPanel::default().show(ctx, |ui| {
+                ui.image(&tex_frame.handle, ui.available_size());
+            });
+        };
 
         ctx.request_repaint();
     }
