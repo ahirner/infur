@@ -337,4 +337,21 @@ mod test {
         let f2 = app.generate().unwrap().expect("video should keep playing");
         assert_eq!(f2.buffer.size, [640 / 2, 480 / 2]);
     }
+
+    #[test]
+    fn switch_video_then_scale() {
+        let mut app = ProcessingApp::default();
+        // in 640x480 out same
+        app.control(AppCmd::Video(VideoCmd::Play(long_small_input()))).unwrap();
+        let f1 = app.generate().unwrap().unwrap();
+        assert_eq!(f1.buffer.size, [640, 480]);
+        // in 1280x720 out same
+        app.control(AppCmd::Video(VideoCmd::Play(short_large_input()))).unwrap();
+        let f2 = app.generate().unwrap().unwrap();
+        assert_eq!(f2.buffer.size, [1280, 720]);
+        // in 1280x720 out twice
+        app.control(AppCmd::Scale(2.0)).unwrap();
+        let f3 = app.generate().unwrap().unwrap();
+        assert_eq!(f3.buffer.size, [1280 * 2, 720 * 2]);
+    }
 }
