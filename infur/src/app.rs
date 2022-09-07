@@ -183,4 +183,21 @@ mod test {
         assert_eq!(f2.id, f3.id);
         assert_eq!(f3.buffer.size, [1280 / 2, 720 / 2]);
     }
+
+    #[test]
+    fn pause_video() {
+        let mut app = ProcessingApp::default();
+        app.control(AppCmd::Video(VideoCmd::Play(long_small_input()))).unwrap();
+        let f1 = app.generate().unwrap().unwrap();
+        app.control(AppCmd::Video(VideoCmd::Pause(true))).unwrap();
+        assert!(!app.is_dirty());
+        let f2 = app.generate().unwrap().unwrap();
+        assert_eq!(f1.id, f2.id);
+        assert!(!app.is_dirty());
+
+        app.control(AppCmd::Video(VideoCmd::Pause(false))).unwrap();
+        assert!(app.is_dirty());
+        let f3 = app.generate().unwrap().unwrap();
+        assert_ne!(f2.id, f3.id);
+    }
 }

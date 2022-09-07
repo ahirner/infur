@@ -184,6 +184,7 @@ struct InFur {
     main_texture: Option<TextureFrame>,
     config: ProcConfig,
     video_input: Vec<String>,
+    paused: bool,
     error_history: VecDeque<String>,
     counter: FrameCounter,
     show_count: u64,
@@ -200,6 +201,7 @@ impl InFur {
             error_history: VecDeque::with_capacity(3),
             config,
             video_input: vec![],
+            paused: false,
             counter: FrameCounter::default(),
             show_count: 0,
         }
@@ -251,6 +253,7 @@ impl eframe::App for InFur {
             ui.label(RichText::new("Video").font(FontId::proportional(30.0)));
             ui.label(frame_status);
 
+            // (re-)play video
             let mut vid_input_changed = false;
             for inp in self.video_input.iter_mut() {
                 let textbox = ui.text_edit_singleline(inp);
@@ -259,6 +262,11 @@ impl eframe::App for InFur {
             if vid_input_changed {
                 self.send(AppCmd::Video(VideoCmd::Play(self.video_input.clone())));
             }
+
+            // (un-)pause video
+            if ui.checkbox(&mut self.paused, "Pause").changed {
+                self.send(AppCmd::Video(VideoCmd::Pause(self.paused)))
+            };
 
             ui.label(RichText::new("Detection").font(FontId::proportional(30.0)));
             let scale = Slider::new(&mut self.config.scale, 0.1f32..=1.0)

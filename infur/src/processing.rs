@@ -63,6 +63,8 @@ pub(crate) trait Processor {
 pub(crate) enum VideoCmd {
     /// Start or restart playing video from this ffmpeg input
     Play(Vec<String>),
+    /// Pause generating new frames
+    Pause(bool),
     /// Stop whenever
     Stop,
 }
@@ -72,6 +74,7 @@ pub(crate) enum VideoCmd {
 pub(crate) struct VideoPlayer {
     vid: Option<FFMpegDecoder>,
     input: Vec<String>,
+    paused: bool,
 }
 
 impl VideoPlayer {
@@ -95,6 +98,9 @@ impl Processor for VideoPlayer {
                 let builder = FFMpegDecoderBuilder::default().input(self.input.clone());
                 self.vid = Some(FFMpegDecoder::try_new(builder)?);
             }
+            Self::Command::Pause(paused) => {
+                self.paused = paused;
+            }
             Self::Command::Stop => {
                 self.close_video()?;
             }
@@ -103,10 +109,13 @@ impl Processor for VideoPlayer {
     }
 
     fn is_dirty(&self) -> bool {
-        self.vid.is_some()
+        !self.paused && self.vid.is_some()
     }
 
     fn advance(&mut self, _inp: &(), out: &mut Self::Output) -> Self::ProcessResult {
+        if self.paused {
+            return Ok(());
+        }
         if let Some(vid) = self.vid.as_mut() {
             // either reuse, re-create (on size change) or create a frame with suitable buffer
             let frame = if let Some(ref mut frame) = out {
