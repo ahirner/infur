@@ -1,3 +1,4 @@
+mod app;
 mod processing;
 
 use std::{
@@ -6,6 +7,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+use app::{AppCmd, AppCmdError, AppProcError, GUIFrame, ProcessingApp, Processor};
 use eframe::{
     egui::{self, CentralPanel, RichText, SidePanel, Slider, TextureFilter, TextureHandle},
     epaint::FontId,
@@ -13,7 +15,6 @@ use eframe::{
 };
 use ff_video::FFMpegDecoder;
 use image_ext::{imageops::FilterType, BgrImage};
-use processing::{AppCmd, AppCmdError, AppProcError, GUIFrame, ProcessingApp, Processor};
 use stable_eyre::eyre::{eyre, Report};
 use thiserror::Error;
 use tracing::{debug, error, warn};
