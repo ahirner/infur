@@ -76,9 +76,11 @@ impl Processor for ProcessingApp {
 
     fn advance(&mut self, input: &(), _out: &mut ()) -> Self::ProcessResult {
         self.vid.advance(input, &mut self.frame)?;
-        if let Some(frame) = &self.frame {
-            self.scale.advance(frame, &mut self.scaled_frame)?;
-        }
+        if self.is_dirty() {
+            if let Some(frame) = &self.frame {
+                self.scale.advance(frame, &mut self.scaled_frame)?;
+            }
+        };
         // todo: trait and/or processor
         if let Some(scaled_frame) = &self.scaled_frame {
             let rgba_pixels = scaled_frame
@@ -162,5 +164,23 @@ mod test {
         app.control(AppCmd::Scale(2.0)).unwrap();
         let f3 = app.generate().unwrap().unwrap();
         assert_eq!(f3.buffer.size, [1280 * 2, 720 * 2]);
+    }
+
+    #[test]
+    fn scaled_frame_after_stopped_video() {
+        let mut app = ProcessingApp::default();
+        app.control(AppCmd::Video(VideoCmd::Play(short_large_input()))).unwrap();
+        let f1 = app.generate().unwrap().unwrap();
+        assert_eq!(f1.buffer.size, [1280, 720]);
+        app.control(AppCmd::Video(VideoCmd::Stop)).unwrap();
+        let f2 = app.generate().unwrap().unwrap();
+        assert_eq!(f1.id, f2.id);
+        assert!(!app.is_dirty());
+
+        app.control(AppCmd::Scale(0.5)).unwrap();
+        assert!(app.is_dirty());
+        let f3 = app.generate().unwrap().unwrap();
+        assert_eq!(f2.id, f3.id);
+        assert_eq!(f3.buffer.size, [1280 / 2, 720 / 2]);
     }
 }

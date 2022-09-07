@@ -169,11 +169,16 @@ impl Deref for ValidScale {
 pub(crate) struct Scale {
     factor: ValidScale,
     resizer: fr::Resizer,
+    dirty: bool,
 }
 
 impl Default for Scale {
     fn default() -> Self {
-        Self { factor: ValidScale(1.0f32), resizer: fr::Resizer::new(fr::ResizeAlg::Nearest) }
+        Self {
+            factor: ValidScale(1.0f32),
+            resizer: fr::Resizer::new(fr::ResizeAlg::Nearest),
+            dirty: true,
+        }
     }
 }
 
@@ -204,20 +209,21 @@ impl Processor for Scale {
 
     fn control(&mut self, cmd: Self::Command) -> Result<&mut Self, Self::ControlError> {
         let factor = cmd.try_into()?;
+        self.dirty = factor != self.factor;
         self.factor = factor;
         // todo: change resizer to bilinear for some factors?
         Ok(self)
     }
 
     fn is_dirty(&self) -> bool {
-        // todo: but what if scale changed?
-        false
+        self.dirty
     }
 
     fn advance(&mut self, input: &Self::Input, out: &mut Self::Output) -> Self::ProcessResult {
         if self.is_unit_scale() {
             // todo: can we at all avoid a clone?
             *out = Some(Frame { id: input.id, img: input.img.clone() });
+            self.dirty = false;
             return Ok(());
         }
 
@@ -256,6 +262,7 @@ impl Processor for Scale {
         )?;
 
         self.resizer.resize(&img_view, &mut img_view_mut)?;
+        self.dirty = false;
         Ok(())
     }
 }

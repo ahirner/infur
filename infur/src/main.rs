@@ -180,7 +180,8 @@ impl Default for ProcConfig {
 struct InFur {
     ctrl_tx: Sender<AppCmd>,
     frame_rx: Receiver<ProcessingResult<GUIFrame>>,
-    main_texture: Option<ProcessingResult<TextureFrame>>,
+    proc_result: ProcessingResult<()>,
+    main_texture: Option<TextureFrame>,
     config: ProcConfig,
     video_input: Vec<String>,
     error_history: VecDeque<String>,
@@ -194,6 +195,7 @@ impl InFur {
         Self {
             ctrl_tx,
             frame_rx,
+            proc_result: Ok(()),
             main_texture: None,
             error_history: VecDeque::with_capacity(3),
             config,
@@ -218,28 +220,29 @@ impl eframe::App for InFur {
                 id: frame.id,
                 handle: ctx.load_texture("frame", frame.buffer, TextureFilter::Linear),
             });
-            self.main_texture = Some(result);
+            match result {
+                Ok(tex) => {
+                    self.main_texture = Some(tex);
+                    self.proc_result = Ok(());
+                }
+                Err(e) => {
+                    self.proc_result = Err(e);
+                }
+            }
         }
 
         // advance and reset counters
         self.show_count += 1;
         let now = std::time::Instant::now();
         if self.counter.elapsed(now) > Duration::from_secs(1) {
-            self.counter.set_on(
-                now,
-                self.show_count,
-                match &self.main_texture {
-                    Some(Ok(t)) => Some(t.id),
-                    _ => None,
-                },
-            );
+            self.counter.set_on(now, self.show_count, self.main_texture.as_ref().map(|t| t.id));
         }
 
         // stringify last frame's status
-        let frame_status = match &self.main_texture {
-            Some(Ok(tex)) => tex.id.to_string(),
-            Some(Err(e)) => e.to_string(),
-            None => "..waiting".to_string(),
+        let frame_status = match (&self.main_texture, &self.proc_result) {
+            (_, Err(e)) => e.to_string(),
+            (Some(tex), Ok(_)) => tex.id.to_string(),
+            _ => "..waiting".to_string(),
         };
 
         SidePanel::left("Options").show(ctx, |ui| {
@@ -293,7 +296,7 @@ impl eframe::App for InFur {
 
         // show last_texture
         // todo: maintain aspect ratio
-        if let Some(Ok(tex_frame)) = &self.main_texture {
+        if let Some(tex_frame) = &self.main_texture {
             CentralPanel::default().show(ctx, |ui| {
                 ui.image(&tex_frame.handle, ui.available_size());
             });
