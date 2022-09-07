@@ -185,8 +185,10 @@ impl Scale {
 /// Error processing scale
 #[derive(Error, Debug)]
 pub(crate) enum ScaleProcError {
+    #[error("scaling from 0-sized input")]
+    ZeroSizeIn,
     #[error("scaling to 0-sized output")]
-    ZeroSize,
+    ZeroSizeOut,
     #[error(transparent)]
     PixelType(#[from] fr::DifferentTypesOfPixelsError),
     #[error(transparent)]
@@ -219,19 +221,21 @@ impl Processor for Scale {
             return Ok(());
         }
 
-        let nwidth = (input.img.width() as f32 * self.factor.0) as _;
-        let nheight = (input.img.height() as f32 * self.factor.0) as _;
-
-        // todo some conversion trait
+        // todo: some conversion trait
         // get input view
         let img_view = fr::ImageView::from_buffer(
-            NonZeroU32::new(input.img.width()).unwrap(),
-            NonZeroU32::new(input.img.height()).unwrap(),
+            NonZeroU32::new(input.img.width()).ok_or(ScaleProcError::ZeroSizeIn)?,
+            NonZeroU32::new(input.img.height()).ok_or(ScaleProcError::ZeroSizeIn)?,
             input.img.as_raw(),
             fr::PixelType::U8x3,
         )?;
 
-        // todo some conversion trait
+        let nwidth = (input.img.width() as f32 * self.factor.0) as _;
+        let nheight = (input.img.height() as f32 * self.factor.0) as _;
+        let nwidth0 = NonZeroU32::new(nwidth).ok_or(ScaleProcError::ZeroSizeOut)?;
+        let nheight0 = NonZeroU32::new(nheight).ok_or(ScaleProcError::ZeroSizeOut)?;
+
+        // todo: some conversion trait
         // get or create new frame
         let frame = if let Some(ref mut frame) = out {
             if frame.img.width() != nwidth || frame.img.height() != nheight {
@@ -245,13 +249,35 @@ impl Processor for Scale {
 
         // get output view
         let mut img_view_mut = fr::ImageViewMut::from_buffer(
-            NonZeroU32::new(nwidth).ok_or(ScaleProcError::ZeroSize)?,
-            NonZeroU32::new(nheight).ok_or(ScaleProcError::ZeroSize)?,
+            nwidth0,
+            nheight0,
             frame.img.as_mut(),
             fr::PixelType::U8x3,
         )?;
 
         self.resizer.resize(&img_view, &mut img_view_mut)?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn scale_from_size0() {
+        let zero = Frame { id: 0, img: BgrImage::new(0, 10) };
+        let mut out = None;
+        let mut scale = Scale::default();
+        scale.control(0.99).unwrap();
+        assert!(matches!(scale.advance(&zero, &mut out), Err(ScaleProcError::ZeroSizeIn)));
+    }
+    #[test]
+    fn scale_to_size0() {
+        let img = Frame { id: 0, img: BgrImage::new(10, 10) };
+        let mut out = None;
+        let mut scale = Scale::default();
+        scale.control(0.00000001).unwrap();
+        assert!(matches!(scale.advance(&img, &mut out), Err(ScaleProcError::ZeroSizeOut)));
     }
 }
