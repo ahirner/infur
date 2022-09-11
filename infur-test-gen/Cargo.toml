@@ -4,4 +4,6 @@ version = "0.1.0"
 edition = "2021"
 description = "generate synthetic test media"
 
-[dependencies]
+[build-dependencies]
+ureq = "2"
+filetime = "0.2"
