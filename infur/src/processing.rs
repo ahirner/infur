@@ -213,7 +213,7 @@ pub(crate) enum ScaleProcError {
 impl Processor for Scale {
     type Command = f32;
     type ControlError = <ValidScale as TryFrom<f32>>::Error;
-    type Input = Frame;
+    type Input = Option<Frame>;
     type Output = Option<Frame>;
     type ProcessResult = Result<(), ScaleProcError>;
 
@@ -230,10 +230,14 @@ impl Processor for Scale {
     }
 
     fn advance(&mut self, input: &Self::Input, out: &mut Self::Output) -> Self::ProcessResult {
+        self.dirty = false;
+        let input = match input {
+            Some(i) => i,
+            None => return Ok(()),
+        };
         if self.is_unit_scale() {
             // todo: can we at all avoid a clone?
             *out = Some(Frame { id: input.id, img: input.img.clone() });
-            self.dirty = false;
             return Ok(());
         }
 
@@ -287,7 +291,7 @@ mod test {
         let mut out = None;
         let mut scale = Scale::default();
         scale.control(0.99).unwrap();
-        assert!(matches!(scale.advance(&zero, &mut out), Err(ScaleProcError::ZeroSizeIn)));
+        assert!(matches!(scale.advance(&Some(zero), &mut out), Err(ScaleProcError::ZeroSizeIn)));
     }
     #[test]
     fn scale_to_size0() {
@@ -295,6 +299,6 @@ mod test {
         let mut out = None;
         let mut scale = Scale::default();
         scale.control(0.00000001).unwrap();
-        assert!(matches!(scale.advance(&img, &mut out), Err(ScaleProcError::ZeroSizeOut)));
+        assert!(matches!(scale.advance(&Some(img), &mut out), Err(ScaleProcError::ZeroSizeOut)));
     }
 }

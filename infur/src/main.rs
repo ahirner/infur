@@ -4,7 +4,7 @@ mod processing;
 
 use std::{
     collections::VecDeque,
-    sync::mpsc::{Receiver, Sender, SyncSender, TryRecvError},
+    sync::mpsc::{Receiver, RecvTimeoutError, Sender, SyncSender, TryRecvError},
     time::{Duration, Instant},
 };
 
@@ -167,14 +167,17 @@ impl Default for FrameCounter {
     }
 }
 
+#[derive(serde::Deserialize, serde::Serialize)]
 struct ProcConfig {
+    video_input: Vec<String>,
     min_conf: f32,
     scale: f32,
+    paused: bool,
 }
 
 impl Default for ProcConfig {
     fn default() -> Self {
-        Self { min_conf: 0.5, scale: 0.5 }
+        Self { min_conf: 0.5, scale: 0.5, video_input: vec![], paused: false }
     }
 }
 
@@ -184,28 +187,36 @@ struct InFur {
     proc_result: ProcessingResult<()>,
     main_texture: Option<TextureFrame>,
     config: ProcConfig,
-    video_input: Vec<String>,
-    paused: bool,
+    closing: bool,
+    allow_closing: bool,
     error_history: VecDeque<String>,
     counter: FrameCounter,
     show_count: u64,
 }
 
 impl InFur {
-    fn new(ctrl_tx: Sender<AppCmd>, frame_rx: Receiver<ProcessingResult<GUIFrame>>) -> Self {
-        let config = ProcConfig::default();
-        Self {
+    fn new(
+        config: ProcConfig,
+        ctrl_tx: Sender<AppCmd>,
+        frame_rx: Receiver<ProcessingResult<GUIFrame>>,
+    ) -> Self {
+        let mut app = Self {
             ctrl_tx,
             frame_rx,
             proc_result: Ok(()),
             main_texture: None,
-            error_history: VecDeque::with_capacity(3),
             config,
-            video_input: vec![],
-            paused: false,
+            closing: false,
+            allow_closing: false,
+            error_history: VecDeque::with_capacity(3),
             counter: FrameCounter::default(),
             show_count: 0,
-        }
+        };
+        // send initial config
+        app.send(AppCmd::Scale(app.config.scale));
+        app.send(AppCmd::Video(VideoCmd::Play(app.config.video_input.clone())));
+        app.send(AppCmd::Video(VideoCmd::Pause(app.config.paused)));
+        app
     }
 
     fn send(&mut self, cmd: AppCmd) {
@@ -215,23 +226,34 @@ impl InFur {
 }
 
 impl eframe::App for InFur {
-    fn update(&mut self, ctx: &eframe::egui::Context, _frame: &mut eframe::Frame) {
-        // update texture from new frame
+    fn update(&mut self, ctx: &eframe::egui::Context, frame_: &mut eframe::Frame) {
+        // update texture from new frame or close if disconnected
         // this limits UI updates if no frames are sent to ca. 30fps
-        if let Ok(frame) = self.frame_rx.recv_timeout(Duration::from_millis(30)) {
-            let result = frame.map(|frame| TextureFrame {
-                id: frame.id,
-                handle: ctx.load_texture("frame", frame.buffer, TextureFilter::Linear),
-            });
-            match result {
-                Ok(tex) => {
-                    self.main_texture = Some(tex);
-                    self.proc_result = Ok(());
-                }
-                Err(e) => {
-                    self.proc_result = Err(e);
+        match self.frame_rx.recv_timeout(Duration::from_millis(30)) {
+            Ok(frame) => {
+                let result = frame.map(|frame| TextureFrame {
+                    id: frame.id,
+                    handle: ctx.load_texture("frame", frame.buffer, TextureFilter::Linear),
+                });
+                match result {
+                    Ok(tex) => {
+                        self.main_texture = Some(tex);
+                        self.proc_result = Ok(());
+                    }
+                    Err(e) => {
+                        self.proc_result = Err(e);
+                    }
                 }
             }
+            Err(RecvTimeoutError::Timeout) => {}
+            Err(RecvTimeoutError::Disconnected) => {
+                self.allow_closing = true;
+                frame_.close();
+            }
+        }
+        if self.closing && !self.allow_closing {
+            self.send(AppCmd::Video(VideoCmd::Stop));
+            self.send(AppCmd::Exit);
         }
 
         // advance and reset counters
@@ -256,17 +278,17 @@ impl eframe::App for InFur {
 
             // (re-)play video
             let mut vid_input_changed = false;
-            for inp in self.video_input.iter_mut() {
+            for inp in self.config.video_input.iter_mut() {
                 let textbox = ui.text_edit_singleline(inp);
                 vid_input_changed = vid_input_changed || textbox.lost_focus();
             }
             if vid_input_changed {
-                self.send(AppCmd::Video(VideoCmd::Play(self.video_input.clone())));
+                self.send(AppCmd::Video(VideoCmd::Play(self.config.video_input.clone())));
             }
 
             // (un-)pause video
-            if ui.checkbox(&mut self.paused, "Pause").changed {
-                self.send(AppCmd::Video(VideoCmd::Pause(self.paused)))
+            if ui.checkbox(&mut self.config.paused, "Pause").changed {
+                self.send(AppCmd::Video(VideoCmd::Pause(self.config.paused)))
             };
 
             ui.label(RichText::new("Detection").font(FontId::proportional(30.0)));
@@ -312,6 +334,23 @@ impl eframe::App for InFur {
         };
 
         ctx.request_repaint();
+    }
+
+    fn on_close_event(&mut self) -> bool {
+        self.error_history.push_front("exiting...".to_string());
+        // send exit once
+        if !self.closing {
+            // we could not close the video to exit faster, but
+            // would end with an ffmpeg error
+            self.send(AppCmd::Video(VideoCmd::Stop));
+            self.send(AppCmd::Exit);
+        }
+        self.closing = true;
+        self.allow_closing
+    }
+
+    fn save(&mut self, storage: &mut dyn eframe::Storage) {
+        eframe::set_value(storage, eframe::APP_KEY, &self.config);
     }
 }
 
@@ -376,30 +415,33 @@ fn main() -> Result<()> {
     let (frame_tx, frame_rx) = std::sync::mpsc::sync_channel(2);
     let (ctrl_tx, ctrl_rx) = std::sync::mpsc::channel();
 
-    let mut app_gui = InFur::new(ctrl_tx.clone(), frame_rx);
-    let app_proc = ProcessingApp::default();
-
     debug!("spawning Proc thread");
+    let app_proc = ProcessingApp::default();
     let infur_thread = std::thread::Builder::new()
         .name("Proc".to_string())
         .spawn(move || proc_loop(ctrl_rx, frame_tx, app_proc))?;
-    // send defaults and config from args
-    {
-        let config = ProcConfig::default();
-        ctrl_tx.send(AppCmd::Scale(config.scale))?;
-        // set video from args
-        ctrl_tx.send(AppCmd::Video(VideoCmd::Play(args.clone())))?;
-        app_gui.video_input = args;
-    }
 
-    let window_opts = NativeOptions { vsync: true, ..Default::default() };
     debug!("starting InFur GUI");
-    eframe::run_native("InFur", window_opts, Box::new(|_| Box::new(app_gui)));
+    let window_opts = NativeOptions { vsync: true, ..Default::default() };
+    let ctrl_tx_gui = ctrl_tx;
+    eframe::run_native(
+        "InFur",
+        window_opts,
+        Box::new(|cc| {
+            let config = match cc.storage {
+                Some(storage) => eframe::get_value(storage, eframe::APP_KEY).unwrap_or_default(),
+                None => todo!(),
+            };
+            let mut app_gui = InFur::new(config, ctrl_tx_gui, frame_rx);
+            // still override video from args
+            if !args.is_empty() {
+                app_gui.config.video_input = args;
+            }
+            Box::new(app_gui)
+        }),
+    );
 
-    // exit verbose on error
-    ctrl_tx.send(AppCmd::Video(VideoCmd::Stop)).map_err(|e| error!("{:?}", e)).unwrap();
-    ctrl_tx.send(AppCmd::Exit).map_err(|e| error!("{:?}", e)).unwrap();
+    // ensure exit code
     infur_thread.join().unwrap().unwrap();
-
     Ok(())
 }

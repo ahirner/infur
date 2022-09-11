@@ -77,9 +77,7 @@ impl Processor for ProcessingApp {
     fn advance(&mut self, input: &(), _out: &mut ()) -> Self::ProcessResult {
         self.vid.advance(input, &mut self.frame)?;
         if self.is_dirty() {
-            if let Some(frame) = &self.frame {
-                self.scale.advance(frame, &mut self.scaled_frame)?;
-            }
+            self.scale.advance(&self.frame, &mut self.scaled_frame)?;
         };
         // todo: trait and/or processor
         if let Some(scaled_frame) = &self.scaled_frame {
