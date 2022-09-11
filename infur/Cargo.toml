@@ -16,6 +16,7 @@ fast_image_resize = { version = "1" }
 # need onnxruntime .14 for 0-dim input tolerance (not in .13),
 # then furhtermore need master to resolve ndarray with tract-core...
 onnxruntime = { git = "https://github.com/nbigaouette/onnxruntime-rs" }
+once_cell = "1"
 image-ext = { path = "../image-ext" }
 ff-video = { path = "../ff-video" }
 

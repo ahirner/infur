@@ -1,4 +1,5 @@
 mod app;
+mod predict_onnx;
 mod processing;
 
 use std::{

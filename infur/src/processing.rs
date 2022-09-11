@@ -34,6 +34,7 @@ pub(crate) trait Processor {
     ///
     /// For why we can't impl Iterator see:
     /// <http://lukaskalbertodt.github.io/2018/08/03/solving-the-generalized-streaming-iterator-problem-without-gats.html>
+    /// <https://docs.rs/fst/latest/fst/trait.Streamer.html>>
     type Output;
 
     /// Return value of processing input
