@@ -16,6 +16,7 @@ use eframe::{
 };
 use ff_video::FFMpegDecoder;
 use image_ext::{imageops::FilterType, BgrImage};
+use predict_onnx::ModelCmd;
 use stable_eyre::eyre::{eyre, Report};
 use thiserror::Error;
 use tracing::{debug, error, warn};
@@ -170,15 +171,29 @@ impl Default for FrameCounter {
 #[derive(serde::Deserialize, serde::Serialize)]
 struct ProcConfig {
     video_input: Vec<String>,
-    min_conf: f32,
     scale: f32,
     paused: bool,
+    model_input: String,
+    min_conf: f32,
 }
 
 impl Default for ProcConfig {
     fn default() -> Self {
-        Self { min_conf: 0.5, scale: 0.5, video_input: vec![], paused: false }
+        Self {
+            video_input: vec![],
+            min_conf: 0.5,
+            scale: 0.5,
+            paused: false,
+            model_input: String::default(),
+        }
     }
+}
+
+#[derive(Default, Clone)]
+struct ProcStatus {
+    video: String,
+    scale: String,
+    model: String,
 }
 
 struct InFur {
@@ -192,6 +207,7 @@ struct InFur {
     error_history: VecDeque<String>,
     counter: FrameCounter,
     show_count: u64,
+    proc_status: ProcStatus,
 }
 
 impl InFur {
@@ -211,11 +227,15 @@ impl InFur {
             error_history: VecDeque::with_capacity(3),
             counter: FrameCounter::default(),
             show_count: 0,
+            proc_status: ProcStatus::default(),
         };
         // send initial config
         app.send(AppCmd::Scale(app.config.scale));
-        app.send(AppCmd::Video(VideoCmd::Play(app.config.video_input.clone())));
+        app.send(AppCmd::Video(VideoCmd::Play(
+            app.config.video_input.iter().cloned().filter(|s| !s.is_empty()).collect(),
+        )));
         app.send(AppCmd::Video(VideoCmd::Pause(app.config.paused)));
+        app.send(AppCmd::Model(ModelCmd::Load(app.config.model_input.clone())));
         app
     }
 
@@ -263,33 +283,55 @@ impl eframe::App for InFur {
             self.counter.set_on(now, self.show_count, self.main_texture.as_ref().map(|t| t.id));
         }
 
-        // stringify last frame's status
-        let frame_status = match (&self.main_texture, &self.proc_result) {
-            (_, Err(e)) => e.to_string(),
+        // stringify last frame's statuses
+        self.proc_status.video = match (&self.main_texture, &self.proc_result) {
+            (_, Err(AppError::Command(AppCmdError::Video(e)))) => e.to_string(),
+            (_, Err(AppError::Processing(AppProcError::Video(e)))) => e.to_string(),
             (Some(tex), Ok(_)) => tex.id.to_string(),
             _ => "..waiting".to_string(),
         };
+        match &self.proc_result {
+            Err(AppError::Command(AppCmdError::Scale(e))) => self.proc_status.scale = e.to_string(),
+            Err(AppError::Processing(AppProcError::Scale(e))) => {
+                self.proc_status.scale = e.to_string()
+            }
+            Ok(_) => self.proc_status.scale = String::default(),
+            _ => {}
+        }
+        match &self.proc_result {
+            Err(AppError::Command(AppCmdError::Model(e))) => self.proc_status.model = e.to_string(),
+            Err(AppError::Processing(AppProcError::Model(e))) => {
+                self.proc_status.model = e.to_string()
+            }
+            Ok(_) if self.config.model_input.is_empty() => {
+                self.proc_status.model = String::default()
+            }
+            _ => {}
+        }
 
         SidePanel::left("Options").show(ctx, |ui| {
             ui.spacing_mut().item_spacing.y = 10.0;
             // video input
             ui.label(RichText::new("Video").font(FontId::proportional(30.0)));
-            ui.label(frame_status);
-
+            // (un-)pause video
+            if ui.checkbox(&mut self.config.paused, "Pause").changed {
+                self.send(AppCmd::Video(VideoCmd::Pause(self.config.paused)))
+            };
             // (re-)play video
+            if self.config.video_input.is_empty() {
+                self.config.video_input.push(String::default());
+            }
             let mut vid_input_changed = false;
             for inp in self.config.video_input.iter_mut() {
                 let textbox = ui.text_edit_singleline(inp);
                 vid_input_changed = vid_input_changed || textbox.lost_focus();
             }
             if vid_input_changed {
-                self.send(AppCmd::Video(VideoCmd::Play(self.config.video_input.clone())));
+                self.send(AppCmd::Video(VideoCmd::Play(
+                    self.config.video_input.iter().cloned().filter(|s| !s.is_empty()).collect(),
+                )));
             }
-
-            // (un-)pause video
-            if ui.checkbox(&mut self.config.paused, "Pause").changed {
-                self.send(AppCmd::Video(VideoCmd::Pause(self.config.paused)))
-            };
+            ui.label(&self.proc_status.video);
 
             ui.label(RichText::new("Detection").font(FontId::proportional(30.0)));
             let scale = Slider::new(&mut self.config.scale, 0.1f32..=1.0)
@@ -300,7 +342,16 @@ impl eframe::App for InFur {
             if scale_response.changed {
                 self.send(AppCmd::Scale(self.config.scale));
             };
-            // todo: actual model
+            if !self.proc_status.scale.is_empty() {
+                ui.label(&self.proc_status.model);
+            }
+
+            // (re-)load model
+            let model_input = ui.text_edit_singleline(&mut self.config.model_input);
+            if model_input.lost_focus() {
+                self.send(AppCmd::Model(ModelCmd::Load(self.config.model_input.clone())));
+            }
+            ui.label(&self.proc_status.model);
             let min_conf = Slider::new(&mut self.config.min_conf, 0f32..=1.0)
                 .step_by(0.01f64)
                 .text("min_conf")
@@ -316,7 +367,7 @@ impl eframe::App for InFur {
             );
             ui.label(frame_stats);
 
-            // quite fatal errors
+            // rather fatal errors or final messages
             ui.with_layout(egui::Layout::bottom_up(egui::Align::LEFT), |ui| {
                 for (i, err) in self.error_history.iter().cloned().enumerate() {
                     let col = egui::Color32::RED.linear_multiply(1.0 - (i as f32 / 4.0));
@@ -357,8 +408,8 @@ impl eframe::App for InFur {
 fn proc_loop(
     ctrl_rx: Receiver<AppCmd>,
     frame_tx: SyncSender<ProcessingResult<GUIFrame>>,
-    mut app: ProcessingApp,
 ) -> Result<()> {
+    let mut app = ProcessingApp::default();
     loop {
         // todo: exit on closed channel?
         loop {
@@ -416,10 +467,9 @@ fn main() -> Result<()> {
     let (ctrl_tx, ctrl_rx) = std::sync::mpsc::channel();
 
     debug!("spawning Proc thread");
-    let app_proc = ProcessingApp::default();
     let infur_thread = std::thread::Builder::new()
         .name("Proc".to_string())
-        .spawn(move || proc_loop(ctrl_rx, frame_tx, app_proc))?;
+        .spawn(move || proc_loop(ctrl_rx, frame_tx))?;
 
     debug!("starting InFur GUI");
     let window_opts = NativeOptions { vsync: true, ..Default::default() };

@@ -4,7 +4,10 @@ use ff_video::{FFVideoError, VideoProcError};
 use image_ext::Pixel;
 use thiserror::Error;
 
-use crate::processing::{Frame, Scale, ScaleProcError, ValidScaleError, VideoCmd, VideoPlayer};
+use crate::{
+    predict_onnx::{Model, ModelCmd, ModelCmdError, ModelInfo, ModelProcError},
+    processing::{Frame, Scale, ScaleProcError, ValidScaleError, VideoCmd, VideoPlayer},
+};
 
 pub(crate) use crate::processing::Processor;
 
@@ -15,6 +18,8 @@ pub(crate) enum AppProcError {
     Video(#[from] VideoProcError),
     #[error(transparent)]
     Scale(#[from] ScaleProcError),
+    #[error(transparent)]
+    Model(#[from] ModelProcError),
 }
 
 /// Application command processing error
@@ -24,6 +29,8 @@ pub(crate) enum AppCmdError {
     Scale(#[from] ValidScaleError),
     #[error(transparent)]
     Video(#[from] FFVideoError),
+    #[error(transparent)]
+    Model(#[from] ModelCmdError),
 }
 
 /// Control entire application
@@ -33,17 +40,20 @@ pub(crate) enum AppCmd {
     Video(VideoCmd),
     /// Control scale factor
     Scale(f32),
+    /// Control loaded model, empty disables it
+    Model(ModelCmd),
     /// Exit App
     Exit,
 }
 
 /// Example app
 #[derive(Default)]
-pub(crate) struct ProcessingApp {
+pub(crate) struct ProcessingApp<'m> {
     vid: VideoPlayer,
     scale: Scale,
     frame: Option<Frame>,
     scaled_frame: Option<Frame>,
+    model: Model<'m>,
 
     pub(crate) to_exit: bool,
 }
@@ -52,9 +62,13 @@ pub(crate) struct ProcessingApp {
 pub(crate) struct GUIFrame {
     pub(crate) id: u64,
     pub(crate) buffer: ColorImage,
+    // todo: instead of info per frame, we need to distinguish
+    // processing results (this) from control results (another msg variant)
+    #[allow(dead_code)]
+    pub(crate) model_info: Option<ModelInfo>,
 }
 
-impl Processor for ProcessingApp {
+impl Processor for ProcessingApp<'_> {
     type Command = AppCmd;
     type ControlError = AppCmdError;
     type Input = ();
@@ -70,6 +84,9 @@ impl Processor for ProcessingApp {
                 self.scale.control(cmd)?;
             }
             AppCmd::Exit => self.to_exit = true,
+            AppCmd::Model(cmd) => {
+                self.model.control(cmd)?;
+            }
         };
         Ok(self)
     }
@@ -94,7 +111,11 @@ impl Processor for ProcessingApp {
                 size: [scaled_frame.img.width() as usize, scaled_frame.img.height() as usize],
                 pixels: rgba_pixels,
             };
-            Ok(Some(GUIFrame { id: scaled_frame.id, buffer: col_img }))
+            Ok(Some(GUIFrame {
+                id: scaled_frame.id,
+                buffer: col_img,
+                model_info: self.model.get_info().cloned(),
+            }))
         } else {
             Ok(None)
         }

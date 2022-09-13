@@ -53,10 +53,19 @@ pub(crate) enum ModelInputFormatError {
     Infer(String),
 }
 
+#[derive(Debug, Clone)]
+#[allow(dead_code)]
+pub(crate) struct ModelInfo {
+    input_names: Vec<String>,
+    input0_dtype: String,
+    output_names: Vec<String>,
+}
+
 #[derive(Debug)]
 struct ImageSession<'s> {
     session: Session<'s>,
     img_proc: ImgPreProc,
+    model_info: ModelInfo,
 }
 
 /// ONNX session with pre-processing u8 images.
@@ -77,7 +86,11 @@ impl<'s> ImageSession<'s> {
     ) -> Result<Self, ModelInputFormatError> {
         let (dim_seq, color_range) = infer_img_pre_proc(&session.inputs[0], norm_float)?;
         let img_proc = ImgPreProc { dim_seq, color_seq, color_range };
-        Ok(Self { session, img_proc })
+        let input_names = session.inputs.iter().map(|i| i.name.clone()).collect();
+        let input0_dtype = format!("{:?}", session.inputs[0].input_type);
+        let output_names = session.outputs.iter().map(|o| o.name.clone()).collect();
+        let model_info = ModelInfo { input_names, input0_dtype, output_names };
+        Ok(Self { session, img_proc, model_info })
     }
 
     /// Forward pass an NHWC(BGR) image batch
@@ -251,8 +264,8 @@ fn infer_img_pre_proc(
     Ok((dim_seq, color_range))
 }
 
+#[derive(Clone, Debug)]
 pub(crate) enum ModelCmd {
-    #[allow(dead_code)]
     Load(String),
 }
 
@@ -272,7 +285,7 @@ where
             // todo: could use a more advanced fork to control intra vs. inter threads
             // e.g.: https://github.com/VOICEVOX/onnruntime-rs
             // discussion to migrate to official org:  https://github.com/nbigaouette/onnxruntime-rs/issues/112
-            ModelCmd::Load(string_path) => {
+            ModelCmd::Load(string_path) if !string_path.is_empty() => {
                 let session = ENVIRONMENT
                     .new_session_builder()?
                     .with_optimization_level(GraphOptimizationLevel::Extended)?
@@ -293,6 +306,9 @@ where
                 };
                 self.img_session =
                     Some(ImageSession::try_from_session(session, col_seq, Some(norm_float))?);
+            }
+            ModelCmd::Load(_) => {
+                self.img_session = None;
             }
         }
         Ok(self)
@@ -319,6 +335,12 @@ where
 
     fn is_dirty(&self) -> bool {
         false
+    }
+}
+
+impl<T> Model<'_, T> {
+    pub(crate) fn get_info(&self) -> Option<&ModelInfo> {
+        self.img_session.as_ref().map(|s| &s.model_info)
     }
 }
 
