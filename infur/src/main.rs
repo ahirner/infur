@@ -4,92 +4,32 @@ mod processing;
 
 use std::{
     collections::VecDeque,
+    result::Result as StdResult,
     sync::mpsc::{Receiver, RecvTimeoutError, Sender, SyncSender, TryRecvError},
     time::{Duration, Instant},
 };
 
-use app::{AppCmd, AppCmdError, AppProcError, GUIFrame, ProcessingApp, Processor};
+use app::{AppCmd, AppCmdError, AppInfo, AppProcError, GUIFrame, ProcessingApp, Processor};
 use eframe::{
     egui::{self, CentralPanel, RichText, SidePanel, Slider, TextureFilter, TextureHandle},
     epaint::FontId,
     NativeOptions,
 };
-use ff_video::FFMpegDecoder;
-use image_ext::{imageops::FilterType, BgrImage};
 use predict_onnx::ModelCmd;
 use stable_eyre::eyre::{eyre, Report};
-use thiserror::Error;
-use tracing::{debug, error, warn};
+use tracing::{debug, warn};
 use tracing_subscriber::{fmt, EnvFilter};
 
 use crate::processing::VideoCmd;
 
-/// Error processing commands or inputs
-#[derive(Error, Debug)]
-pub(crate) enum AppError {
-    #[error("processing command: {0}")]
-    Command(#[from] AppCmdError),
-    #[error("processing video feed: {0}")]
-    Processing(#[from] AppProcError),
-}
-
+/// Result with user facing error
 type Result<T> = std::result::Result<T, Report>;
-type ProcessingResult<T> = std::result::Result<T, AppError>;
 
-#[allow(dead_code)]
-fn infer_onnx(
-    img_shape: [usize; 4],
-    vid: &mut FFMpegDecoder,
-    mut img: BgrImage,
-) -> Result<std::time::Instant> {
-    use onnxruntime::{
-        environment::Environment, ndarray, ndarray::Array4, tensor::OrtOwnedTensor,
-        GraphOptimizationLevel, LoggingLevel,
-    };
+/// Result from processing a frame
+type FrameResult = StdResult<GUIFrame, AppProcError>;
 
-    let environment = Environment::builder()
-        .with_name("test")
-        // The ONNX Runtime's log level can be different than the one of the wrapper crate or the application.
-        .with_log_level(LoggingLevel::Warning)
-        .build()?;
-
-    let mut session = environment
-        .new_session_builder()?
-        .with_optimization_level(GraphOptimizationLevel::Extended)?
-        .with_number_threads(1)?
-        .with_model_from_file("models/mobilenet.onnx")
-        .unwrap();
-
-    eprintln!("model session {:?}", session);
-    for (i, input) in session.inputs.iter().enumerate() {
-        eprintln!("input {}: {:?} {}", i, input.dimensions, input.name);
-    }
-    let output_names = session.outputs.iter().map(|o| o.name.clone()).collect::<Vec<_>>();
-
-    let (nwidth, nheight) = (img_shape[2] as _, img_shape[1] as _);
-    let t0 = std::time::Instant::now();
-    for _ in 0..10 {
-        let _id = vid.read_frame(&mut img)?;
-        let img_scaled = image_ext::imageops::resize(&img, nwidth, nheight, FilterType::Nearest);
-        let ten_scaled = Array4::from_shape_vec(img_shape, img_scaled.to_vec())?;
-        let result: Vec<OrtOwnedTensor<f32, _>> = session.run(vec![ten_scaled])?;
-        // remove all batch dims
-        let result = result.iter().map(|t| t.index_axis(ndarray::Axis(0), 0)).collect::<Vec<_>>();
-
-        println!(
-            "result: {:?}",
-            result.iter().zip(output_names.iter()).map(|(t, o)| (o, t.shape())).collect::<Vec<_>>()
-        );
-        // perform max across classes
-        let hm_max = result[0].index_axis(ndarray::Axis(0), 0).fold_axis(
-            ndarray::Axis(0),
-            f32::MIN,
-            |&a, &b| a.max(b),
-        );
-        println!("hm_max: {:?} max: {}", hm_max.shape(), hm_max.fold(f32::MIN, |a, &b| a.max(b)));
-    }
-    Ok(t0)
-}
+/// Result from processing commands
+type CtrlResult = StdResult<AppInfo, AppCmdError>;
 
 fn init_logs() -> Result<()> {
     stable_eyre::install()?;
@@ -198,8 +138,9 @@ struct ProcStatus {
 
 struct InFur {
     ctrl_tx: Sender<AppCmd>,
-    frame_rx: Receiver<ProcessingResult<GUIFrame>>,
-    proc_result: ProcessingResult<()>,
+    frame_rx: Receiver<FrameResult>,
+    proc_result: Option<AppProcError>,
+    ctrl_rx: Receiver<CtrlResult>,
     main_texture: Option<TextureFrame>,
     config: ProcConfig,
     closing: bool,
@@ -214,12 +155,14 @@ impl InFur {
     fn new(
         config: ProcConfig,
         ctrl_tx: Sender<AppCmd>,
-        frame_rx: Receiver<ProcessingResult<GUIFrame>>,
+        frame_rx: Receiver<FrameResult>,
+        ctrl_rx: Receiver<CtrlResult>,
     ) -> Self {
         let mut app = Self {
             ctrl_tx,
             frame_rx,
-            proc_result: Ok(()),
+            ctrl_rx,
+            proc_result: None,
             main_texture: None,
             config,
             closing: false,
@@ -258,10 +201,10 @@ impl eframe::App for InFur {
                 match result {
                     Ok(tex) => {
                         self.main_texture = Some(tex);
-                        self.proc_result = Ok(());
+                        self.proc_result = None;
                     }
                     Err(e) => {
-                        self.proc_result = Err(e);
+                        self.proc_result = Some(e);
                     }
                 }
             }
@@ -276,7 +219,7 @@ impl eframe::App for InFur {
             self.send(AppCmd::Exit);
         }
 
-        // advance and reset counters
+        // advance and reset counters every second
         self.show_count += 1;
         let now = std::time::Instant::now();
         if self.counter.elapsed(now) > Duration::from_secs(1) {
@@ -285,28 +228,50 @@ impl eframe::App for InFur {
 
         // stringify last frame's statuses
         self.proc_status.video = match (&self.main_texture, &self.proc_result) {
-            (_, Err(AppError::Command(AppCmdError::Video(e)))) => e.to_string(),
-            (_, Err(AppError::Processing(AppProcError::Video(e)))) => e.to_string(),
-            (Some(tex), Ok(_)) => tex.id.to_string(),
+            (_, Some(AppProcError::Video(e))) => e.to_string(),
+            (Some(tex), _) => tex.id.to_string(),
             _ => "..waiting".to_string(),
         };
         match &self.proc_result {
-            Err(AppError::Command(AppCmdError::Scale(e))) => self.proc_status.scale = e.to_string(),
-            Err(AppError::Processing(AppProcError::Scale(e))) => {
-                self.proc_status.scale = e.to_string()
-            }
-            Ok(_) => self.proc_status.scale = String::default(),
+            Some(AppProcError::Scale(e)) => self.proc_status.scale = e.to_string(),
+            None => self.proc_status.scale = String::default(),
             _ => {}
         }
         match &self.proc_result {
-            Err(AppError::Command(AppCmdError::Model(e))) => self.proc_status.model = e.to_string(),
-            Err(AppError::Processing(AppProcError::Model(e))) => {
-                self.proc_status.model = e.to_string()
-            }
-            Ok(_) if self.config.model_input.is_empty() => {
+            Some(AppProcError::Model(e)) => self.proc_status.model = e.to_string(),
+            None if self.config.model_input.is_empty() => {
                 self.proc_status.model = String::default()
             }
             _ => {}
+        }
+
+        // stringify control errors or app infos, may override frame status
+        match self.ctrl_rx.try_recv() {
+            Ok(info) => match info {
+                Ok(info) => {
+                    if let Some(model_info) = info.model_info {
+                        self.proc_status.model = format!(
+                            "Model loaded: {} -> {}",
+                            model_info.input_names.join(","),
+                            model_info.output_names.join(",")
+                        );
+                    }
+                }
+                Err(AppCmdError::Video(e)) => {
+                    self.proc_status.video = e.to_string();
+                }
+                Err(AppCmdError::Scale(e)) => {
+                    self.proc_status.scale = e.to_string();
+                }
+                Err(AppCmdError::Model(e)) => {
+                    self.proc_status.model = e.to_string();
+                }
+            },
+            Err(TryRecvError::Disconnected) => {
+                self.error_history.push_front("lost processing control".to_string());
+                frame_.close();
+            }
+            Err(_) => {}
         }
 
         SidePanel::left("Options").show(ctx, |ui| {
@@ -352,6 +317,7 @@ impl eframe::App for InFur {
                 self.send(AppCmd::Model(ModelCmd::Load(self.config.model_input.clone())));
             }
             ui.label(&self.proc_status.model);
+
             let min_conf = Slider::new(&mut self.config.min_conf, 0f32..=1.0)
                 .step_by(0.01f64)
                 .text("min_conf")
@@ -407,15 +373,28 @@ impl eframe::App for InFur {
 
 fn proc_loop(
     ctrl_rx: Receiver<AppCmd>,
-    frame_tx: SyncSender<ProcessingResult<GUIFrame>>,
+    frame_tx: SyncSender<FrameResult>,
+    app_tx: SyncSender<CtrlResult>,
 ) -> Result<()> {
+    fn send_app_info(app: &ProcessingApp, app_tx: &SyncSender<CtrlResult>) {
+        let app_info = app.info();
+        debug!("sending updated app info {:?}", &app_info);
+        let _ = app_tx.send(Ok(app_info));
+    }
+
     let mut app = ProcessingApp::default();
+
     loop {
         // todo: exit on closed channel?
+        let mut state_change = false;
         loop {
             let cmd = if !app.is_dirty() {
                 // video is not playing, block
                 debug!("blocking on new command");
+                if state_change {
+                    send_app_info(&app, &app_tx);
+                    state_change = false;
+                };
                 match ctrl_rx.recv() {
                     Ok(c) => Some(c),
                     // unfixable (hung-up)
@@ -434,7 +413,9 @@ fn proc_loop(
                 debug!("relaying command: {:?}", cmd);
                 if let Err(e) = app.control(cmd) {
                     // Control Error
-                    let _ = frame_tx.send(Err(e.into()));
+                    let _ = app_tx.send(Err(e));
+                } else {
+                    state_change = true;
                 }
             };
             if app.to_exit {
@@ -442,18 +423,21 @@ fn proc_loop(
             };
         }
 
+        if state_change {
+            send_app_info(&app, &app_tx);
+        }
+
         match app.generate() {
             Ok(Some(frame)) => {
                 // block for now, but need to think of dropping behavior
                 let _ = frame_tx.send(Ok(frame));
             }
-            // todo: handle better
             Ok(None) => {
-                warn!("Didn't expect None result because we should have waited for dirty video")
+                warn!("Nothing to process yet")
             }
 
             Err(e) => {
-                let _ = frame_tx.send(Err(e.into()));
+                let _ = frame_tx.send(Err(e));
             }
         };
     }
@@ -465,11 +449,12 @@ fn main() -> Result<()> {
 
     let (frame_tx, frame_rx) = std::sync::mpsc::sync_channel(2);
     let (ctrl_tx, ctrl_rx) = std::sync::mpsc::channel();
+    let (ctrl_result_tx, ctrl_result_rx) = std::sync::mpsc::sync_channel(2);
 
     debug!("spawning Proc thread");
     let infur_thread = std::thread::Builder::new()
         .name("Proc".to_string())
-        .spawn(move || proc_loop(ctrl_rx, frame_tx))?;
+        .spawn(move || proc_loop(ctrl_rx, frame_tx, ctrl_result_tx))?;
 
     debug!("starting InFur GUI");
     let window_opts = NativeOptions { vsync: true, ..Default::default() };
@@ -482,7 +467,7 @@ fn main() -> Result<()> {
                 Some(storage) => eframe::get_value(storage, eframe::APP_KEY).unwrap_or_default(),
                 None => todo!(),
             };
-            let mut app_gui = InFur::new(config, ctrl_tx_gui, frame_rx);
+            let mut app_gui = InFur::new(config, ctrl_tx_gui, frame_rx, ctrl_result_rx);
             // still override video from args
             if !args.is_empty() {
                 app_gui.config.video_input = args;

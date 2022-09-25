@@ -62,10 +62,20 @@ pub(crate) struct ProcessingApp<'m> {
 pub(crate) struct GUIFrame {
     pub(crate) id: u64,
     pub(crate) buffer: ColorImage,
-    // todo: instead of info per frame, we need to distinguish
     // processing results (this) from control results (another msg variant)
-    #[allow(dead_code)]
+}
+
+#[derive(Clone, Debug)]
+/// Information on current state of app
+pub(crate) struct AppInfo {
     pub(crate) model_info: Option<ModelInfo>,
+}
+
+impl ProcessingApp<'_> {
+    pub(crate) fn info(&self) -> AppInfo {
+        let model_info = self.model.get_info().cloned();
+        AppInfo { model_info }
+    }
 }
 
 impl Processor for ProcessingApp<'_> {
@@ -111,11 +121,7 @@ impl Processor for ProcessingApp<'_> {
                 size: [scaled_frame.img.width() as usize, scaled_frame.img.height() as usize],
                 pixels: rgba_pixels,
             };
-            Ok(Some(GUIFrame {
-                id: scaled_frame.id,
-                buffer: col_img,
-                model_info: self.model.get_info().cloned(),
-            }))
+            Ok(Some(GUIFrame { id: scaled_frame.id, buffer: col_img }))
         } else {
             Ok(None)
         }

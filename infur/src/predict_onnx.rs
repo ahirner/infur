@@ -56,9 +56,9 @@ pub(crate) enum ModelInputFormatError {
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
 pub(crate) struct ModelInfo {
-    input_names: Vec<String>,
-    input0_dtype: String,
-    output_names: Vec<String>,
+    pub(crate) input_names: Vec<String>,
+    pub(crate) input0_dtype: String,
+    pub(crate) output_names: Vec<String>,
 }
 
 #[derive(Debug)]
