@@ -2,9 +2,11 @@
 use eframe::epaint::ColorImage;
 use ff_video::{FFVideoError, VideoProcError};
 use image_ext::Pixel;
+use onnxruntime::ndarray::Array3;
 use thiserror::Error;
 
 use crate::{
+    decode_predict::ColorCode,
     predict_onnx::{Model, ModelCmd, ModelCmdError, ModelInfo, ModelProcError},
     processing::{Frame, Scale, ScaleProcError, ValidScaleError, VideoCmd, VideoPlayer},
 };
@@ -54,7 +56,7 @@ pub(crate) struct ProcessingApp<'m> {
     frame: Option<Frame>,
     scaled_frame: Option<Frame>,
     model: Model<'m>,
-
+    decoder: ColorCode,
     pub(crate) to_exit: bool,
 }
 
@@ -62,7 +64,6 @@ pub(crate) struct ProcessingApp<'m> {
 pub(crate) struct GUIFrame {
     pub(crate) id: u64,
     pub(crate) buffer: ColorImage,
-    // processing results (this) from control results (another msg variant)
 }
 
 #[derive(Clone, Debug)]
@@ -106,8 +107,26 @@ impl Processor for ProcessingApp<'_> {
         if self.is_dirty() {
             self.scale.advance(&self.frame, &mut self.scaled_frame)?;
         };
-        // todo: trait and/or processor
         if let Some(scaled_frame) = &self.scaled_frame {
+            let mut out = vec![];
+            self.model.advance(&scaled_frame.img, &mut out)?;
+            if !out.is_empty() {
+                let out = &out[0];
+                let shape = out.shape();
+                let shape = [shape[0], shape[1], shape[2]];
+                // todo: find way to not clone
+                let hm: Array3<f32> =
+                    Array3::from_shape_vec(shape, out.clone().into_raw_vec()).unwrap();
+
+                // todo: cache color frame
+                let mut img = None;
+                self.decoder.advance(&hm, &mut img);
+
+                // todo: send input image and color coded img
+                return Ok(Some(GUIFrame { id: scaled_frame.id, buffer: img.unwrap() }));
+            }
+
+            // todo: trait and/or processor
             let rgba_pixels = scaled_frame
                 .img
                 .pixels()

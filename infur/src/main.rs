@@ -1,4 +1,5 @@
 mod app;
+mod decode_predict;
 mod predict_onnx;
 mod processing;
 

@@ -289,7 +289,7 @@ where
                 let session = ENVIRONMENT
                     .new_session_builder()?
                     .with_optimization_level(GraphOptimizationLevel::Extended)?
-                    .with_number_threads(1)?
+                    .with_number_threads(3)?
                     .with_model_from_file(string_path)?;
 
                 // todo: control col_seq properly instead of hardcoding our conventions
