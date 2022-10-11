@@ -57,6 +57,7 @@ pub(crate) struct ProcessingApp<'m> {
     scaled_frame: Option<Frame>,
     model: Model<'m>,
     decoder: ColorCode,
+    decoded_img: Option<ColorImage>,
     pub(crate) to_exit: bool,
 }
 
@@ -64,6 +65,7 @@ pub(crate) struct ProcessingApp<'m> {
 pub(crate) struct GUIFrame {
     pub(crate) id: u64,
     pub(crate) buffer: ColorImage,
+    pub(crate) decoded_buffer: Option<ColorImage>,
 }
 
 #[derive(Clone, Debug)]
@@ -118,12 +120,12 @@ impl Processor for ProcessingApp<'_> {
                 let hm: Array3<f32> =
                     Array3::from_shape_vec(shape, out.clone().into_raw_vec()).unwrap();
 
-                // todo: cache color frame
-                let mut img = None;
-                self.decoder.advance(&hm, &mut img);
+                self.decoder.advance(&hm, &mut self.decoded_img);
 
                 // todo: send input image and color coded img
-                return Ok(Some(GUIFrame { id: scaled_frame.id, buffer: img.unwrap() }));
+                //return Ok(Some(GUIFrame { id: scaled_frame.id, buffer: img.unwrap() }));
+            } else {
+                self.decoded_img = None;
             }
 
             // todo: trait and/or processor
@@ -140,7 +142,11 @@ impl Processor for ProcessingApp<'_> {
                 size: [scaled_frame.img.width() as usize, scaled_frame.img.height() as usize],
                 pixels: rgba_pixels,
             };
-            Ok(Some(GUIFrame { id: scaled_frame.id, buffer: col_img }))
+            Ok(Some(GUIFrame {
+                id: scaled_frame.id,
+                buffer: col_img,
+                decoded_buffer: self.decoded_img.clone(),
+            }))
         } else {
             Ok(None)
         }

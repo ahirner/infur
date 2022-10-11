@@ -30,6 +30,7 @@ const COLORS_PALATTE: [(u8, u8, u8); 20] = [
 ];
 
 fn color_code(klass: usize, alpha: f32) -> Color32 {
+    // todo: pre-transform COLORS into linear space
     let (r, g, b) = COLORS_PALATTE[klass % COLORS_PALATTE.len()];
     Color32::from_rgba_unmultiplied(r, g, b, (alpha * 255.0f32) as u8)
 }
@@ -68,7 +69,6 @@ impl Processor for ColorCode {
             let mut k_max = 0;
             let mut c_max = 0f32;
             klasses.iter().enumerate().for_each(|(i, confidence)| {
-                //println!("{}, {}", i, confidence);
                 if confidence > &c_max {
                     k_max = i;
                     c_max = *confidence;

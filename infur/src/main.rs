@@ -43,6 +43,7 @@ fn init_logs() -> Result<()> {
 struct TextureFrame {
     id: u64,
     handle: TextureHandle,
+    decoded_handle: Option<TextureHandle>,
 }
 
 struct FrameCounter {
@@ -194,20 +195,21 @@ impl eframe::App for InFur {
         // update texture from new frame or close if disconnected
         // this limits UI updates if no frames are sent to ca. 30fps
         match self.frame_rx.recv_timeout(Duration::from_millis(30)) {
-            Ok(frame) => {
-                let result = frame.map(|frame| TextureFrame {
-                    id: frame.id,
-                    handle: ctx.load_texture("frame", frame.buffer, TextureFilter::Linear),
+            Ok(Ok(frame)) => {
+                let decoded_handle = frame.decoded_buffer.map(|decoded_img| {
+                    ctx.load_texture("decoded_texture", decoded_img, TextureFilter::Linear)
                 });
-                match result {
-                    Ok(tex) => {
-                        self.main_texture = Some(tex);
-                        self.proc_result = None;
-                    }
-                    Err(e) => {
-                        self.proc_result = Some(e);
-                    }
-                }
+
+                let tex = TextureFrame {
+                    id: frame.id,
+                    handle: ctx.load_texture("main_texture", frame.buffer, TextureFilter::Linear),
+                    decoded_handle,
+                };
+                self.main_texture = Some(tex);
+                self.proc_result = None;
+            }
+            Ok(Err(e)) => {
+                self.proc_result = Some(e);
             }
             Err(RecvTimeoutError::Timeout) => {}
             Err(RecvTimeoutError::Disconnected) => {
@@ -344,10 +346,19 @@ impl eframe::App for InFur {
         });
 
         // show last_texture
-        // todo: maintain aspect ratio
         if let Some(tex_frame) = &self.main_texture {
             CentralPanel::default().show(ctx, |ui| {
-                ui.image(&tex_frame.handle, ui.available_size());
+                // occupy max width with constant aspect ratio
+                let max_width = ui.available_width();
+                let [w, h] = tex_frame.handle.size();
+                let w_scale = max_width as f32 / w as f32;
+                let (w, h) = (w as f32 * w_scale, h as f32 * w_scale);
+                ui.image(&tex_frame.handle, [w, h]);
+                // prop decoded image underneath
+                // todo: blend somehow?
+                if let Some(ref handle) = tex_frame.decoded_handle {
+                    ui.image(handle, [w, h]);
+                };
             });
         };
 
