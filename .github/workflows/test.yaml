@@ -17,6 +17,7 @@ jobs:
           INFUR_NO_TEST_GEN: 1
   test:
     strategy:
+      fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
     runs-on: ${{ matrix.os }}
@@ -26,4 +27,17 @@ jobs:
       - run: cargo version -v
       - run: ffmpeg -version
       - uses: actions/checkout@v3
-      - run: cargo test
+      - name: cargo test (*nix)
+        if: startsWith(matrix.os, 'windows') != true
+        run: cargo test
+      - name: cargo test (windows)
+        if: startsWith(matrix.os, 'windows')
+        shell: bash
+        run: |
+          # workaround so that downloaded dll gets in fact loaded by OS,
+          # the native link directive in onnxruntime-sys build.rs doesn't work
+          # https://github.com/nbigaouette/onnxruntime-rs/issues/83
+          cargo build
+          # copy .dll next to test .exe
+          find target -name onnxruntime.dll -exec cp "{}" target/debug/deps \;
+          cargo test
