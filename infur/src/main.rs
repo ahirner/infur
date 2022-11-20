@@ -64,6 +64,7 @@ impl FrameCounter {
         self.recvd_since = match (self.recvd_id, recvd_id) {
             (None, _) => None,
             (_, None) => None,
+            (Some(r0), Some(r1)) if r0 > r1 => None,
             (Some(r0), Some(r1)) => Some(r1 - r0),
         };
         self.elapsed_since = self.elapsed(now);
