@@ -356,6 +356,7 @@ impl eframe::App for InFur {
         self.allow_closing
     }
 
+    #[cfg(feature = "persistence")]
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
         eframe::set_value(storage, eframe::APP_KEY, &self.config);
     }

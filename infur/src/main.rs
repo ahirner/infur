@@ -118,15 +118,16 @@ fn main() -> Result<()> {
         "InFur",
         window_opts,
         Box::new(|cc| {
-            let config = match cc.storage {
+            let mut config = match cc.storage {
+                #[cfg(feature = "persistence")]
                 Some(storage) => eframe::get_value(storage, eframe::APP_KEY).unwrap_or_default(),
-                None => todo!(),
+                _ => gui::ProcConfig::default(),
             };
-            let mut app_gui = gui::InFur::new(config, ctrl_tx_gui, frame_rx, ctrl_result_rx);
             // still override video from args
             if !args.is_empty() {
-                app_gui.config.video_input = args;
+                config.video_input = args;
             }
+            let app_gui = gui::InFur::new(config, ctrl_tx_gui, frame_rx, ctrl_result_rx);
             Box::new(app_gui)
         }),
     );
