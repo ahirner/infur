@@ -306,8 +306,9 @@ impl eframe::App for InFur {
             ui.add(min_conf);
 
             // frame stats
+            ui.label(RichText::new("Stats").font(FontId::proportional(30.0)));
             let frame_stats = format!(
-                "fps UI: {:>3.1}  processed: {:>3.1}  drops/skips: {}",
+                "fps UI: {:>3.1}\nprocessed: {:>3.1}\ndrops/skips: {}",
                 self.counter.shown_fps(),
                 self.counter.recvd_fps(),
                 self.counter.dropped_since()
