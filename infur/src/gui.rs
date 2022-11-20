@@ -165,6 +165,7 @@ impl eframe::App for InFur {
     fn update(&mut self, ctx: &eframe::egui::Context, frame_: &mut eframe::Frame) {
         // update texture from new frame or close if disconnected
         // this limits UI updates if no frames are sent to ca. 30fps
+        let mut new_frame = false;
         match self.frame_rx.recv_timeout(Duration::from_millis(30)) {
             Ok(Ok(frame)) => {
                 let decoded_handle = frame.decoded_buffer.map(|decoded_img| {
@@ -176,6 +177,7 @@ impl eframe::App for InFur {
                     handle: ctx.load_texture("main_texture", frame.buffer, TextureFilter::Linear),
                     decoded_handle,
                 };
+                new_frame = true;
                 self.main_texture = Some(tex);
                 self.proc_result = None;
             }
@@ -201,10 +203,10 @@ impl eframe::App for InFur {
         }
 
         // stringify last frame's statuses
-        self.proc_status.video = match (&self.main_texture, &self.proc_result) {
-            (_, Some(AppProcError::Video(e))) => e.to_string(),
-            (Some(tex), _) => tex.id.to_string(),
-            _ => "..waiting".to_string(),
+        match (new_frame, &self.main_texture, &self.proc_result) {
+            (true, _, Some(AppProcError::Video(e))) => self.proc_status.video = e.to_string(),
+            (true, Some(tex), _) => self.proc_status.video = tex.id.to_string(),
+            _ => {}
         };
         match &self.proc_result {
             Some(AppProcError::Scale(e)) => self.proc_status.scale = e.to_string(),
