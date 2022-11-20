@@ -1,8 +1,14 @@
 [package]
+authors = ["Alexander Hirner <alexander.hirner@moonvision.io>"]
+license = "MIT"
 name = "infur"
 version = "0.1.0"
 edition = "2021"
-description = "show case onnx model inference on video stream"
+description = "ONNX model inference on video and images"
+keywords = ["ONNX", "Neural Networks", "Inference", "Segmentation", "GUI", "Prediction", "Video"]
+repository = "https://github.com/ahirner/infur"
+readme = "README.md"
+homepage = "https://github.com/ahirner/infur"
 
 [features]
 default = ["persistence"]
