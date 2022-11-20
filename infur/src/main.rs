@@ -302,7 +302,7 @@ impl eframe::App for InFur {
             }
             ui.label(&self.proc_status.video);
 
-            ui.label(RichText::new("Detection").font(FontId::proportional(30.0)));
+            ui.label(RichText::new("Inference").font(FontId::proportional(30.0)));
             let scale = Slider::new(&mut self.config.scale, 0.1f32..=1.0)
                 .step_by(0.01f64)
                 .text("scale")
