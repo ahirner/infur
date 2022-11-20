@@ -64,7 +64,12 @@ fn make_younger(file: impl AsRef<Path>) {
 pub fn main() {
     println!("cargo:rerun-if-changed=build.rs");
 
-    //let out_dir = env::var_os("OUT_DIR").unwrap();
+    // set in CI to avoid ffmpeg dependency on clippy runs
+    println!("cargo:rerun-if-env-changed=INFUR_NO_TEST_GEN");
+    if std::env::var("INFUR_NO_TEST_GEN").ok().as_deref() == Some("1") {
+        return;
+    };
+
     let gen_root = PathBuf::from(&env::var("CARGO_MANIFEST_DIR").unwrap());
     let gen_root =
         Path::new(&gen_root).parent().expect("wanted parent of manifest for generating test files");

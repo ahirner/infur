@@ -13,6 +13,8 @@ jobs:
           pip install pre-commit
           pre-commit install
       - run: pre-commit run --all-files --show-diff-on-failure
+        env:
+          INFUR_NO_TEST_GEN: 1
   test:
     strategy:
       matrix:
