@@ -94,18 +94,11 @@ pub(crate) struct ProcConfig {
     pub(crate) scale: f32,
     pub(crate) paused: bool,
     pub(crate) model_input: String,
-    pub(crate) min_conf: f32,
 }
 
 impl Default for ProcConfig {
     fn default() -> Self {
-        Self {
-            video_input: vec![],
-            min_conf: 0.5,
-            scale: 0.5,
-            paused: false,
-            model_input: String::default(),
-        }
+        Self { video_input: vec![], scale: 0.5, paused: false, model_input: String::default() }
     }
 }
 
@@ -298,12 +291,6 @@ impl eframe::App for InFur {
                 self.send(AppCmd::Model(ModelCmd::Load(self.config.model_input.clone())));
             }
             ui.label(&self.proc_status.model);
-
-            let min_conf = Slider::new(&mut self.config.min_conf, 0f32..=1.0)
-                .step_by(0.01f64)
-                .text("min_conf")
-                .clamp_to_range(true);
-            ui.add(min_conf);
 
             // frame stats
             ui.label(RichText::new("Stats").font(FontId::proportional(30.0)));
