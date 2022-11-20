@@ -3,7 +3,7 @@ use image::{ImageBuffer, Rgb};
 /// For Bgr ImageBuffer.
 ///
 /// The native BGR PixelFormat was removed in 0.24:
-/// https://github.com/image-rs/image/issues/1686
+/// <https://github.com/image-rs/image/issues/1686>
 #[repr(C)]
 #[derive(Copy, Clone)]
 pub struct Bgr(pub [u8; 3]);

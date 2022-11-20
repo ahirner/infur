@@ -4,8 +4,8 @@ use onnxruntime::ndarray::Array3;
 
 /// 20 RGB high-contrast BGR/RGB triplets
 ///
-/// adapted from: http://www.color-hex.com/color-palette/23381
-/// and: http://www.color-hex.com/color-palette/52402
+/// adapted from: <http://www.color-hex.com/color-palette/23381>
+/// and: <http://www.color-hex.com/color-palette/52402>
 const COLORS_PALATTE: [(u8, u8, u8); 20] = [
     (75, 180, 60),
     (75, 25, 230),
