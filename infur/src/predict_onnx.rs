@@ -70,7 +70,7 @@ struct ImageSession<'s> {
 
 /// ONNX session with pre-processing u8 images.
 impl<'s> ImageSession<'s> {
-    /// Constract an `ImageSession` by inferring some required image input meta data.
+    /// Construct an `ImageSession` by inferring some required image input meta data.
     ///
     /// The basic assumption is that images are passed as batches at position 0.
     ///
@@ -375,7 +375,7 @@ mod test {
         let mut tensors = vec![];
         m.advance(&img, &mut tensors).unwrap();
 
-        assert_eq!(tensors.len(), 2, "this sementation model should return two tensors");
+        assert_eq!(tensors.len(), 2, "this segmentation model should return two tensors");
         assert_eq!(tensors[0].shape(), [21, 240, 320], "out should be 21 classes upscaled");
         assert_eq!(tensors[1].shape(), [21, 240, 320], "aux should be 21 classes upscaled");
     }

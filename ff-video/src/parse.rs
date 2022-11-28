@@ -251,7 +251,7 @@ impl InfoParser {
 
 /// Blanket implementation for lines of ffmpeg's default stderr bytes.
 pub(crate) trait FFMpegLineIter: Iterator {
-    /// Emit lines on \n, \r (CR) or both but never emtpy lines.
+    /// Emit lines on \n, \r (CR) or both but never empty lines.
     fn ffmpeg_lines(self) -> FFMpegLines<Self>
     where
         Self: Sized,
