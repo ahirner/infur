@@ -6,7 +6,7 @@ use onnxruntime::ndarray::Array3;
 ///
 /// adapted from: <http://www.color-hex.com/color-palette/23381>
 /// and: <http://www.color-hex.com/color-palette/52402>
-const COLORS_PALATTE: [(u8, u8, u8); 20] = [
+const COLORS_PALETTE: [(u8, u8, u8); 20] = [
     (75, 180, 60),
     (75, 25, 230),
     (25, 225, 255),
@@ -31,7 +31,7 @@ const COLORS_PALATTE: [(u8, u8, u8); 20] = [
 
 fn color_code(klass: usize, alpha: f32) -> Color32 {
     // todo: pre-transform COLORS into linear space
-    let (r, g, b) = COLORS_PALATTE[klass % COLORS_PALATTE.len()];
+    let (r, g, b) = COLORS_PALETTE[klass % COLORS_PALETTE.len()];
     Color32::from_rgba_unmultiplied(r, g, b, (alpha * 255.0f32) as u8)
 }
 
@@ -92,7 +92,7 @@ mod test {
 
     #[test]
     fn color_2() {
-        let c = COLORS_PALATTE[2];
+        let c = COLORS_PALETTE[2];
         assert_eq!(color_code(2, 0.5), Color32::from_rgba_unmultiplied(c.0, c.1, c.2, 127));
     }
 
