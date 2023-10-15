@@ -6,8 +6,8 @@ use crate::app::{AppCmd, AppCmdError, AppInfo, AppProcError, GUIFrame};
 use crate::predict_onnx::ModelCmd;
 use crate::processing::VideoCmd;
 use eframe::{
-    egui::{self, CentralPanel, RichText, SidePanel, Slider, TextureFilter, TextureHandle},
-    epaint::FontId,
+    egui::{self, CentralPanel, RichText, SidePanel, Slider, TextureHandle, TextureOptions},
+    epaint::{FontId, Vec2},
 };
 
 /// Result from processing a frame
@@ -169,12 +169,19 @@ impl eframe::App for InFur {
         match self.frame_rx.recv_timeout(Duration::from_millis(30)) {
             Ok(Ok(frame)) => {
                 let decoded_handle = frame.decoded_buffer.map(|decoded_img| {
-                    ctx.load_texture("decoded_texture", decoded_img, TextureFilter::Linear)
+                    ctx.load_texture("decoded_texture", decoded_img, TextureOptions::NEAREST)
                 });
 
                 let tex = TextureFrame {
                     id: frame.id,
-                    handle: ctx.load_texture("main_texture", frame.buffer, TextureFilter::Linear),
+                    handle: ctx.load_texture(
+                        "main_texture",
+                        frame.buffer,
+                        TextureOptions {
+                            magnification: egui::TextureFilter::Nearest,
+                            minification: egui::TextureFilter::Linear,
+                        },
+                    ),
                     decoded_handle,
                 };
                 new_frame = true;
@@ -321,11 +328,11 @@ impl eframe::App for InFur {
                 let [w, h] = tex_frame.handle.size();
                 let w_scale = max_width / w as f32;
                 let (w, h) = (w as f32 * w_scale, h as f32 * w_scale);
-                ui.image(&tex_frame.handle, [w, h]);
+                ui.add(egui::Image::new(&tex_frame.handle).fit_to_exact_size(Vec2::new(w, h)));
                 // prop decoded image underneath
                 // todo: blend somehow?
                 if let Some(ref handle) = tex_frame.decoded_handle {
-                    ui.image(handle, [w, h]);
+                    ui.add(egui::Image::new(handle).fit_to_exact_size(Vec2::new(w, h)));
                 };
             });
         };
