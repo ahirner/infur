@@ -1,11 +1,10 @@
 [package]
 name = "ff-video"
-version = "0.1.0"
-edition = "2021"
-
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+description = "Slim image decoding with ffmpeg."
+version.workspace = true
+edition.workspace = true
 
 [dependencies]
 image-ext = { path = "../image-ext" }
-thiserror = "1"
-tracing = "0.1"
+thiserror.workspace = true
+tracing.workspace = true

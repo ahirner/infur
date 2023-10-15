@@ -1,6 +1,28 @@
 [workspace]
 members = ["infur", "infur-test-gen", "ff-video", "image-ext"]
+default-members = ["infur"]
 resolver = "2"
+
+[workspace.package]
+version = "0.2.0"
+edition = "2021"
+description = "ONNX model inference on video and images"
+authors = ["Alexander Hirner"]
+license = "MIT"
+keywords = ["ONNX", "Neural Networks", "Inference", "Segmentation", "GUI", "Prediction", "Video"]
+readme = "README.md"
+repository = "https://github.com/ahirner/infur"
+homepage = "https://github.com/ahirner/infur"
+
+[workspace.dependencies]
+image = "0.24"
+fast_image_resize = { version = "1" }
+# need onnxruntime .14 for 0-dim input tolerance (not in .13),
+# then furthermore need master to resolve ndarray with tract-core
+onnxruntime = { git = "https://github.com/nbigaouette/onnxruntime-rs" }
+serde = { version = "1", features = ["derive"] }
+thiserror = "1"
+tracing = "0.1"
 
 [profile.dev.package]
 image-ext = { opt-level = 3 }

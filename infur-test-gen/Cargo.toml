@@ -1,8 +1,8 @@
 [package]
 name = "infur-test-gen"
-version = "0.1.0"
-edition = "2021"
 description = "generate synthetic test media"
+version.workspace = true
+edition.workspace = true
 
 [build-dependencies]
 ureq = "2"
