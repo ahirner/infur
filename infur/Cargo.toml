@@ -15,7 +15,7 @@ thiserror.workspace = true
 tracing.workspace = true
 serde.workspace = true
 once_cell = "1"
-eframe = { version = "0.19", features = ["wgpu", "default_fonts"], default-features = false }
+eframe = { version = "0.23", features = ["wgpu", "default_fonts"], default-features = false }
 tracing-subscriber = { version = "0.3", features = ["ansi", "env-filter", "fmt"], default-features = false }
 stable-eyre = "0.2"
 image-ext = { path = "../image-ext" }

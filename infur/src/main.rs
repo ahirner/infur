@@ -130,7 +130,7 @@ fn main() -> Result<()> {
             let app_gui = gui::InFur::new(config, ctrl_tx_gui, frame_rx, ctrl_result_rx);
             Box::new(app_gui)
         }),
-    );
+    )?;
 
     // ensure exit code
     infur_thread.join().unwrap().unwrap();
