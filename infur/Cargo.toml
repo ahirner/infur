@@ -1,31 +1,23 @@
 [package]
-authors = ["Alexander Hirner <alexander.hirner@moonvision.io>"]
-license = "MIT"
 name = "infur"
-version = "0.1.0"
-edition = "2021"
-description = "ONNX model inference on video and images"
-keywords = ["ONNX", "Neural Networks", "Inference", "Segmentation", "GUI", "Prediction", "Video"]
-repository = "https://github.com/ahirner/infur"
-readme = "README.md"
-homepage = "https://github.com/ahirner/infur"
+description.workspace = true
+version.workspace = true
+edition.workspace = true
 
 [features]
 default = ["persistence"]
 persistence = ["eframe/persistence"]
 
 [dependencies]
-thiserror = "1"
-stable-eyre = "0.2"
-tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["ansi", "env-filter", "fmt"], default-features = false }
-eframe = { version = "0.19", features = ["wgpu", "default_fonts"], default-features = false}
-serde = { version = "1", features = ["derive"] }
-fast_image_resize = { version = "1" }
-# need onnxruntime .14 for 0-dim input tolerance (not in .13),
-# then furthermore need master to resolve ndarray with tract-core...
-onnxruntime = { git = "https://github.com/nbigaouette/onnxruntime-rs" }
+fast_image_resize.workspace = true
+onnxruntime.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+serde.workspace = true
 once_cell = "1"
+eframe = { version = "0.19", features = ["wgpu", "default_fonts"], default-features = false }
+tracing-subscriber = { version = "0.3", features = ["ansi", "env-filter", "fmt"], default-features = false }
+stable-eyre = "0.2"
 image-ext = { path = "../image-ext" }
 ff-video = { path = "../ff-video" }
 

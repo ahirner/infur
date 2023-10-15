@@ -319,7 +319,7 @@ impl eframe::App for InFur {
                 // occupy max width with constant aspect ratio
                 let max_width = ui.available_width();
                 let [w, h] = tex_frame.handle.size();
-                let w_scale = max_width as f32 / w as f32;
+                let w_scale = max_width / w as f32;
                 let (w, h) = (w as f32 * w_scale, h as f32 * w_scale);
                 ui.image(&tex_frame.handle, [w, h]);
                 // prop decoded image underneath

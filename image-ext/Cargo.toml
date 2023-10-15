@@ -1,8 +1,8 @@
 [package]
 name = "image-ext"
-version = "0.1.0"
-edition = "2021"
 description = "Extend image crate with BGR pixel type"
+version.workspace = true
+edition.workspace = true
 
 [dependencies]
-image = "0.24"
+image.workspace = true
