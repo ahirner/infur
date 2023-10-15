@@ -174,7 +174,7 @@ enum StreamInfoTerm {
     Final(String),
 }
 
-/// Deliver infos about an ffmpeg video process trhough its stderr file
+/// Deliver infos about an ffmpeg video process through its stderr file
 ///
 /// The receiver can be read until satisfying info was obtained and dropped anytime.
 /// By default, frame updates and other infos are logged as tracing event.

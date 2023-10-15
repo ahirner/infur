@@ -27,7 +27,7 @@ fn run_ffmpeg_synth(
         .expect("synthesizing video couldn't start, do you have ffmpeg in PATH?")
         .wait()
         .expect("synthesizing video didn't finish");
-    assert!(status.success(), "synthesizing videos didn't finish succesfully");
+    assert!(status.success(), "synthesizing videos didn't finish successfully");
 }
 
 fn download(source_url: &str, target_file: impl AsRef<Path>) {
@@ -85,7 +85,7 @@ pub fn main() {
     }
 
     // models
-    // segementation model, see: https://github.com/onnx/models/tree/main/vision/object_detection_segmentation/fcn
+    // segmentation model, see: https://github.com/onnx/models/tree/main/vision/object_detection_segmentation/fcn
     let fcn_resnet50_12_int8 = gen_root.join("models").join("fcn-resnet50-12-int8.onnx");
     download("https://github.com/onnx/models/raw/main/vision/object_detection_segmentation/fcn/model/fcn-resnet50-12-int8.onnx",
         &fcn_resnet50_12_int8);

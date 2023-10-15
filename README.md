@@ -67,7 +67,7 @@ By default, the app's settings are persisted after closing.
 The purpose of this crate is to study tradeoffs regarding model inference, native GUIs and
 video decoding approaches, in Rust :crab:.
 
-There are a couple of Todos will make `InFur` more intersting beyond exploring
+There are a couple of Todos will make `InFur` more interesting beyond exploring
 production-readiness as now:
 
 - [ ] GATify `type Output` in `trait Processor`
